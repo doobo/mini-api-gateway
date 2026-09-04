@@ -21,6 +21,10 @@ export interface AppConfig {
   adminDefaultUsername: string;
   adminDefaultPassword: string;
   adminSessionTtlMs: number;
+  /** Days of usage/audit logs to retain; 0 disables the cleanup job. */
+  logRetentionDays: number;
+  /** Local time (HH:MM) when the daily cleanup runs. */
+  logCleanupTime: string;
 }
 
 export function loadConfig(): AppConfig {
@@ -50,9 +54,24 @@ export function loadConfig(): AppConfig {
     adminDefaultUsername: process.env.ADMIN_DEFAULT_USERNAME || "admin",
     adminDefaultPassword: process.env.ADMIN_DEFAULT_PASSWORD || "admin123",
     adminSessionTtlMs: intEnv("ADMIN_SESSION_TTL_HOURS", 24) * 3_600_000,
+    logRetentionDays: retentionDays(),
+    logCleanupTime: parseCleanupTime(process.env.LOG_CLEANUP_TIME),
   };
 }
 
 export function dataDir(config: AppConfig): string {
   return resolve(config.databasePath, "..") || join(process.cwd(), "data");
+}
+
+function retentionDays(): number {
+  const raw = process.env.LOG_RETENTION_DAYS;
+  if (!raw) return 7;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 7;
+}
+
+/** Accepts "HH:MM" local time; anything else falls back to 03:00. */
+function parseCleanupTime(raw: string | undefined): string {
+  if (raw && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw)) return raw;
+  return "03:00";
 }

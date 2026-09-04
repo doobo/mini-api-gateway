@@ -47,6 +47,39 @@
     </form>
   </dialog>
 
+  <dialog id="providerEditDialog">
+    <h3>Edit provider <span id="providerEditName"></span></h3>
+    <form id="providerEditForm" data-id="">
+      <input name="name" placeholder="name" required>
+      <select name="type"><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="compatible">compatible</option></select>
+      <input name="baseUrl" placeholder="https://api.example.com/v1" required>
+      <input name="apiKey" placeholder="new API key (leave blank to keep)">
+      <label class="check-row"><input type="checkbox" name="enabled"> enabled</label>
+      <div class="dialog-actions">
+        <button type="button" id="providerEditCancel" class="secondary">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="configEditDialog">
+    <h3>Edit config <span id="configEditName"></span></h3>
+    <form id="configEditForm" data-id="">
+      <input name="name" placeholder="name" required>
+      <input name="url" placeholder="https://api.example.com/weather" required>
+      <input name="method" placeholder="POST" value="POST">
+      <input name="apiKey" placeholder="upstream key (leave blank to keep)">
+      <input name="headers" placeholder='{"Authorization":"Bearer ..."} (JSON, optional)'>
+      <input name="requestTemplate" placeholder='{"city":"{{body.city}}"} (JSON, optional)'>
+      <input name="responseTemplate" placeholder='{"content":"{{data.result}}"} (JSON, optional)'>
+      <label class="check-row"><input type="checkbox" name="enabled"> enabled</label>
+      <div class="dialog-actions">
+        <button type="button" id="configEditCancel" class="secondary">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="changePwDialog">
     <h3>Change password</h3>
     <form id="changePwForm">
@@ -92,11 +125,14 @@
       <h2>Models (aliases)</h2>
       <form id="modelForm" class="inline-form">
         <input name="name" placeholder="alias e.g. gpt" required>
+        <input name="providerSearch" placeholder="search provider..." autocomplete="off" list="providerOptions">
+        <datalist id="providerOptions"></datalist>
         <input name="providerId" placeholder="provider id" type="number" required>
         <input name="upstreamModel" placeholder="upstream model e.g. gpt-5" required>
         <button type="submit">Add</button>
       </form>
       <table id="modelsTable"><thead><tr><th>ID</th><th>Alias</th><th>Provider</th><th>Upstream</th><th>Enabled</th><th></th></tr></thead><tbody></tbody></table>
+      <p class="hint">Tip: start typing in the provider box to filter the dropdown locally.</p>
     </section>
 
     <!-- API Keys -->

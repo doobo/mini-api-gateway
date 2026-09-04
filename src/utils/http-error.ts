@@ -56,8 +56,8 @@ export const upstreamError = (message: string) =>
   new ApiError(502, "upstream_error", message);
 export const upstreamTimeout = (message = "Upstream request timed out") =>
   new ApiError(504, "upstream_timeout", message);
-export const internalError = (message = "Internal server error") =>
-  new ApiError(500, "internal_error", message);
+export const internalError = (message = "Internal server error", code = "internal_error") =>
+  new ApiError(500, code, message);
 
 /** Error carrying the upstream HTTP status - used for failover decisions. */
 export class UpstreamStatusError extends Error {

@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import { sha256Hex } from "../utils/crypto";
-import { unauthorized } from "../utils/http-error";
+import { ApiError, unauthorized } from "../utils/http-error";
 import {
   getAdminSession,
   getAdminUser,
@@ -18,6 +18,13 @@ export interface AdminAuthContext {
 }
 
 const AUTH_CONTEXT_KEY = "adminAuth";
+
+/**
+ * 401 for missing/invalid admin credentials. Uses a distinct code so clients
+ * (the web UI) can tell "your session is gone - re-login" apart from
+ * handler-level 401s such as a wrong current password.
+ */
+const adminAuthRequired = () => new ApiError(401, "admin_auth_required", "Admin token required");
 
 export function getAdminAuth(c: Context): AdminAuthContext {
   return c.get(AUTH_CONTEXT_KEY) as AdminAuthContext;
@@ -46,7 +53,7 @@ export function createAdminAuthMiddleware(config: AppConfig) {
     const token = extractBearer(c.req.header("authorization"));
 
     if (!token) {
-      throw unauthorized("Admin token required");
+      throw adminAuthRequired();
     }
 
     // Static bootstrap token keeps scripted/admin-token workflows working.
@@ -66,6 +73,6 @@ export function createAdminAuthMiddleware(config: AppConfig) {
       }
     }
 
-    throw unauthorized("Admin token required");
+    throw adminAuthRequired();
   };
 }

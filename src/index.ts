@@ -11,11 +11,12 @@ import { ApiError, errorResponse, internalError, unauthorized, badRequest } from
 import { chatRoutes } from "./routes/chat";
 import { modelRoutes } from "./routes/models";
 import { forwardRoutes } from "./routes/forward";
-import { adminRoutes } from "./routes/admin";
+import { adminRoutes, setAdminConfig } from "./routes/admin";
 import { createAdminAuthRoutes } from "./routes/admin-auth";
 import { ensureAdminUser } from "./db/queries";
 import { hashPassword } from "./utils/crypto";
 import { webAssets } from "./web-assets";
+import { startLogCleanup, stopLogCleanup } from "./utils/cleanup";
 
 const config = loadConfig();
 setLogLevel(config.logLevel);
@@ -36,6 +37,9 @@ await (async () => {
   ensureAdminUser(config.adminDefaultUsername, await hashPassword(config.adminDefaultPassword));
   logger.info(`admin user '${config.adminDefaultUsername}' ready (default password if freshly created)`);
 })();
+
+setAdminConfig(config);
+startLogCleanup(config);
 
 const app = new Hono();
 
@@ -132,16 +136,14 @@ app.notFound((c) => {
 
 // ------------------------------------------------------------ shutdown
 
-process.on("SIGINT", () => {
-  logger.info("shutting down");
-  closeDatabase();
-  process.exit(0);
-});
-process.on("SIGTERM", () => {
-  logger.info("shutting down");
-  closeDatabase();
-  process.exit(0);
-});
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    logger.info("shutting down");
+    stopLogCleanup();
+    closeDatabase();
+    process.exit(0);
+  });
+}
 
 const server = Bun.serve({
   port: config.port,
@@ -151,3 +153,6 @@ const server = Bun.serve({
 
 logger.info(`mini-api-gateway listening on http://localhost:${server.port}`);
 logger.info(`database: ${config.databasePath}`);
+logger.info(
+  `log cleanup: retention ${config.logRetentionDays}d at ${config.logCleanupTime} local time`,
+);

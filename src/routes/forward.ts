@@ -3,6 +3,7 @@ import { getAuth } from "../middleware/auth";
 import { forbidden } from "../utils/http-error";
 import { getRequestId } from "../middleware/request-log";
 import { getApiConfigByName, recordUsage } from "../db/queries";
+import { decryptSecret } from "../utils/secretbox";
 import { renderTemplate, findUnresolved } from "../transform/template";
 import { validateUpstreamUrl } from "../utils/ssrf";
 import { fetchUpstream, filterRequestHeaders, filterResponseHeaders } from "../utils/http";
@@ -59,8 +60,25 @@ forwardRoutes.all("/:config", async (c) => {
     ...renderedConfigHeaders,
     "x-request-id": requestId,
   };
-  if (config.api_key && !Object.keys(renderedConfigHeaders).some((k) => k.toLowerCase() === "authorization")) {
-    upstreamHeaders["authorization"] = `Bearer ${config.api_key}`;
+  // Stored config keys are encrypted at rest; upstream needs plaintext.
+  let configApiKey: string | null = null;
+  if (config.api_key) {
+    try {
+      configApiKey = decryptSecret(config.api_key);
+    } catch (error) {
+      logger.error("api-config key decrypt failed", {
+        config_id: config.id,
+        config: config.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw internalError(
+        `Stored API key for config '${config.name}' cannot be decrypted - re-enter it in the admin UI (encryption key lost or changed).`,
+        "config_key_undecryptable",
+      );
+    }
+  }
+  if (configApiKey && !Object.keys(renderedConfigHeaders).some((k) => k.toLowerCase() === "authorization")) {
+    upstreamHeaders["authorization"] = `Bearer ${configApiKey}`;
   }
 
   // Build upstream URL with original query string appended.

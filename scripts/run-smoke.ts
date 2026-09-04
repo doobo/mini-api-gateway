@@ -4,13 +4,21 @@
  */
 import { rmSync, mkdirSync } from "node:fs";
 
+// Scratch key file for the test run (see SECRET_KEY_FILE below).
+rmSync("./data/.smoke-secret-key", { force: true });
+
 const DB_PATH = "./data/smoke.db";
-const GATEWAY_PORT = 5630;
+// Overridable so tests can run while a dev server occupies :5630.
+const GATEWAY_PORT = Number(process.env.SMOKE_PORT || 5630);
+const BASE_URL = `http://localhost:${GATEWAY_PORT}`;
+// Dedicated key file so test runs never touch the production data/.secret-key.
+const SECRET_KEY_FILE = "./data/.smoke-secret-key";
 
 function seedDatabase(): void {
   rmSync(DB_PATH, { force: true });
   rmSync(`${DB_PATH}-wal`, { force: true });
   rmSync(`${DB_PATH}-shm`, { force: true });
+  rmSync(SECRET_KEY_FILE, { force: true });
   mkdirSync("data", { recursive: true });
 
   const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
@@ -68,11 +76,15 @@ function seedDatabase(): void {
   insProvider.run("mock-fail-500", "openai", "http://localhost:5699/fail500/v1", "sk-upstream-mock", now, now);
   insProvider.run("mock-fail-429", "openai", "http://localhost:5699/fail429/v1", "sk-upstream-mock", now, now);
   insProvider.run("mock-fail-400", "openai", "http://localhost:5699/fail400/v1", "sk-upstream-mock", now, now);
+  // Rotated through the admin API during the smoke run, which re-stores the
+  // key encrypted; used to prove encrypted keys decrypt on the call path.
+  insProvider.run("mock-encrypted", "openai", "http://localhost:5699/v1", "sk-stale-plaintext", now, now);
   const insModel = db.prepare(
     "INSERT INTO models (name, provider_id, upstream_model, enabled, priority, created_at) VALUES (?, ?, ?, 1, 100, ?)",
   );
   insModel.run("gpt", 1, "gpt-5-mock", now);
   insModel.run("internal", 1, "internal-model", now);
+  insModel.run("enc-model", 5, "gpt-5-mock", now);
 
   const insRoute = db.prepare(
     "INSERT INTO model_routes (model_name, provider_id, upstream_model, priority, weight, enabled) VALUES (?, ?, ?, ?, 100, 1)",
@@ -95,13 +107,18 @@ function seedDatabase(): void {
   const insConfig = db.prepare(
     "INSERT INTO api_configs (name, description, method, url, headers, request_template, response_template, api_key, timeout_ms, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
   );
+  // api_key stays plaintext on purpose: decryptSecret passes legacy plaintext
+  // through, and rotation via PUT re-stores it encrypted.
   insConfig.run(
     "weather", "weather lookup", "POST", "http://localhost:5699/weather", null,
     JSON.stringify({ city: "{{body.city}}" }),
     JSON.stringify({ content: "{{data.result}}", temp: "{{data.temp}}" }),
     null, 5000, now, now,
   );
-  insConfig.run("echo", "echo passthrough", "POST", "http://localhost:5699/anything", null, null, null, null, 5000, now, now);
+  // Plaintext on purpose (legacy row): /f/* must forward it as-is; rotation
+  // via the admin API re-stores it encrypted and the round-trip test below
+  // proves the decrypted value reaches the upstream.
+  insConfig.run("echo", "echo passthrough", "POST", "http://localhost:5699/anything", null, null, null, "sk-echo-plaintext", 5000, now, now);
   insConfig.run("secret-api", "restricted config", "POST", "http://localhost:5699/anything", null, null, null, null, 5000, now, now);
   insConfig.run("blocked-scheme", "SSRF attempt via file://", "POST", "file:///etc/passwd", null, null, null, null, 5000, now, now);
 
@@ -138,6 +155,11 @@ async function main(): Promise<void> {
       ADMIN_TOKEN: "test-admin-token",
       LOG_LEVEL: "info",
       ALLOW_PRIVATE_UPSTREAMS: "1",
+      SMOKE_PORT: String(GATEWAY_PORT),
+      LOG_RETENTION_DAYS: "7",
+      LOG_CLEANUP_TIME: "03:00",
+      SECRET_KEY_FILE,
+      SMOKE_DB_PATH: DB_PATH,
     },
     stdout: "inherit",
     stderr: "inherit",
@@ -145,9 +167,10 @@ async function main(): Promise<void> {
 
   try {
     await waitForPort("http://localhost:5699/anything");
-    await waitForPort(`http://localhost:${GATEWAY_PORT}/health`);
+    await waitForPort(`${BASE_URL}/health`);
     console.log("mock upstream + gateway up\n");
     const test = Bun.spawn(["bun", "scripts/smoke-test.ts"], {
+      env: { ...process.env, SMOKE_BASE_URL: BASE_URL },
       stdout: "inherit",
       stderr: "inherit",
     });

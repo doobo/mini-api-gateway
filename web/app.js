@@ -89,16 +89,20 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (res.status === 401 && token) {
-    // Session expired or revoked.
-    setToken("");
-  }
   if (!res.ok) {
     let message = res.statusText;
+    let code = "";
     try {
       const body = await res.json();
       message = body.error?.message || JSON.stringify(body);
+      code = body.error?.code || "";
     } catch {}
+    // Only a rejected/expired *session* logs the browser out. Handler-level
+    // 401s (e.g. wrong current password) must not clear the login token,
+    // otherwise the retry goes out unauthenticated ("Admin token required").
+    if (res.status === 401 && token && code === "admin_auth_required") {
+      setToken("");
+    }
     throw new Error(`${res.status}: ${message}`);
   }
   return res.json();
@@ -151,6 +155,7 @@ function smallButton(text, onClick, className) {
 }
 
 function revealButton(path) {
+  // Kept for potential future use; keys are no longer viewable (Task.md).
   const btn = document.createElement("button");
   btn.textContent = "Show key";
   btn.onclick = async () => {
@@ -165,7 +170,26 @@ function revealButton(path) {
   return btn;
 }
 
+function wrapButtons(...buttons) {
+  const span = document.createElement("span");
+  span.className = "row-actions";
+  for (const b of buttons) span.appendChild(b);
+  return span;
+}
+
 // ----------------------------------------------------------------- tabs
+
+/** Per-tab loaders. Switching tabs only fetches that tab's data. */
+const tabLoaders = {
+  dashboard: loadDashboard,
+  providers: loadProviders,
+  models: loadModels,
+  keys: loadKeys,
+  configs: loadConfigs,
+  usage: loadUsage,
+  logs: loadLogs,
+  settings: loadSettings,
+};
 
 document.querySelectorAll("nav button").forEach((btn) => {
   btn.onclick = () => {
@@ -173,7 +197,7 @@ document.querySelectorAll("nav button").forEach((btn) => {
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
     btn.classList.add("active");
     el(`tab-${btn.dataset.tab}`).classList.add("active");
-    refreshAll();
+    tabLoaders[btn.dataset.tab]?.();
   };
 });
 
@@ -207,9 +231,12 @@ async function loadDashboard() {
 
 // ------------------------------------------------------------ providers
 
+let providerCache = [];
+
 async function loadProviders() {
   try {
     const data = await api("/admin/providers");
+    providerCache = data.data;
     fillTable(
       "providersTable",
       data.data.map((p) => [
@@ -217,18 +244,59 @@ async function loadProviders() {
         p.name,
         p.type,
         p.base_url,
-        revealButton(`/admin/providers/${p.id}/token`),
+        p.api_key_masked || "(none)",
         p.enabled ? "ON" : "OFF",
-        delButton(async () => {
-          await api(`/admin/providers/${p.id}`, { method: "DELETE" });
-          loadProviders();
-        }),
+        wrapButtons(
+          smallButton("Edit", () => openProviderEdit(p)),
+          delButton(async () => {
+            await api(`/admin/providers/${p.id}`, { method: "DELETE" });
+            loadProviders();
+          }),
+        ),
       ]),
     );
   } catch (e) {
     fillTable("providersTable", [[e.message]]);
   }
 }
+
+function openProviderEdit(p) {
+  const form = el("providerEditForm");
+  form.dataset.id = p.id;
+  el("providerEditName").textContent = p.name;
+  form.elements.name.value = p.name;
+  form.elements.type.value = p.type;
+  form.elements.baseUrl.value = p.base_url;
+  form.elements.apiKey.value = "";
+  form.elements.apiKey.placeholder = p.has_api_key
+    ? "new API key (leave blank to keep current)"
+    : "API key (optional)";
+  form.elements.enabled.checked = Boolean(p.enabled);
+  el("providerEditDialog").showModal();
+}
+
+el("providerEditForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.dataset.id;
+  const body = {
+    name: form.elements.name.value,
+    type: form.elements.type.value,
+    baseUrl: form.elements.baseUrl.value,
+    enabled: form.elements.enabled.checked,
+  };
+  const newKey = form.elements.apiKey.value.trim();
+  if (newKey) body.apiKey = newKey; // only send when rotating
+  try {
+    await api(`/admin/providers/${id}`, { method: "PUT", body: JSON.stringify(body) });
+    el("providerEditDialog").close();
+    loadProviders();
+  } catch (e) {
+    alert(e.message);
+  }
+};
+
+el("providerEditCancel").onclick = () => el("providerEditDialog").close();
 
 el("providerForm").onsubmit = async (event) => {
   event.preventDefault();
@@ -254,35 +322,92 @@ el("providerForm").onsubmit = async (event) => {
 
 async function loadModels() {
   try {
+    // Providers are fetched here (once per visit) to resolve names and power
+    // the searchable picker - only the current tab's APIs are called.
+    if (providerCache.length === 0) {
+      const pdata = await api("/admin/providers");
+      providerCache = pdata.data;
+    }
+    const byId = new Map(providerCache.map((p) => [p.id, p]));
+    updateProviderDatalist();
     const data = await api("/admin/models");
     fillTable(
       "modelsTable",
-      data.data.map((m) => [
-        m.id,
-        m.name,
-        m.provider_id,
-        m.upstream_model,
-        m.enabled ? "ON" : "OFF",
-        delButton(async () => {
-          await api(`/admin/models/${m.id}`, { method: "DELETE" });
-          loadModels();
-        }),
-      ]),
+      data.data.map((m) => {
+        const provider = byId.get(m.provider_id);
+        return [
+          m.id,
+          m.name,
+          provider ? `${provider.name} (#${provider.id})` : `#${m.provider_id} (missing)`,
+          m.upstream_model,
+          m.enabled ? "ON" : "OFF",
+          delButton(async () => {
+            await api(`/admin/models/${m.id}`, { method: "DELETE" });
+            loadModels();
+          }),
+        ];
+      }),
     );
   } catch (e) {
     fillTable("modelsTable", [[e.message]]);
   }
 }
 
+function updateProviderDatalist() {
+  const datalist = el("providerOptions");
+  datalist.innerHTML = "";
+  for (const p of providerCache) {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.label = `#${p.id} · ${p.type}`;
+    datalist.appendChild(opt);
+  }
+}
+
+// Local search: typing filters the datalist; selecting an entry fills providerId.
+el("modelForm").elements.providerSearch.addEventListener("input", (e) => {
+  const query = e.target.value.trim().toLowerCase();
+  updateProviderDatalist();
+  if (!query) return;
+  const datalist = el("providerOptions");
+  datalist.innerHTML = "";
+  for (const p of providerCache) {
+    if (
+      p.name.toLowerCase().includes(query) ||
+      p.type.toLowerCase().includes(query) ||
+      String(p.id) === query
+    ) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.label = `#${p.id} · ${p.type}`;
+      datalist.appendChild(opt);
+    }
+  }
+});
+
+el("modelForm").elements.providerSearch.addEventListener("change", (e) => {
+  const selected = providerCache.find(
+    (p) => p.name.toLowerCase() === e.target.value.trim().toLowerCase(),
+  );
+  if (selected) el("modelForm").elements.providerId.value = selected.id;
+});
+
 el("modelForm").onsubmit = async (event) => {
   event.preventDefault();
   const form = new FormData(event.target);
+  const searchName = (form.get("providerSearch") || "").trim().toLowerCase();
+  const picked = providerCache.find((p) => p.name.toLowerCase() === searchName);
+  const providerId = picked ? picked.id : Number(form.get("providerId"));
+  if (!providerId) {
+    alert("Pick a provider by name or enter a provider id");
+    return;
+  }
   try {
     await api("/admin/models", {
       method: "POST",
       body: JSON.stringify({
         name: form.get("name"),
-        providerId: Number(form.get("providerId")),
+        providerId,
         upstreamModel: form.get("upstreamModel"),
       }),
     });
@@ -354,17 +479,85 @@ async function loadConfigs() {
         cfg.url,
         cfg.stats.requests,
         cfg.stats.errors,
-        cfg.api_key_masked ? revealButton(`/admin/api-configs/${cfg.id}/token`) : "(none)",
-        delButton(async () => {
-          await api(`/admin/api-configs/${cfg.id}`, { method: "DELETE" });
-          loadConfigs();
-        }),
+        cfg.api_key_masked || "(none)",
+        wrapButtons(
+          smallButton("Edit", () => openConfigEdit(cfg)),
+          delButton(async () => {
+            await api(`/admin/api-configs/${cfg.id}`, { method: "DELETE" });
+            loadConfigs();
+          }),
+        ),
       ]),
     );
   } catch (e) {
     fillTable("configsTable", [[e.message]]);
   }
 }
+
+function openConfigEdit(cfg) {
+  const form = el("configEditForm");
+  form.dataset.id = cfg.id;
+  el("configEditName").textContent = cfg.name;
+  form.elements.name.value = cfg.name;
+  form.elements.url.value = cfg.url;
+  form.elements.method.value = cfg.method || "POST";
+  form.elements.apiKey.value = "";
+  form.elements.apiKey.placeholder = cfg.has_api_key
+    ? "new upstream key (leave blank to keep current)"
+    : "upstream key (optional)";
+  form.elements.headers.value = safePrettyJson(cfg.headers);
+  form.elements.requestTemplate.value = safePrettyJson(cfg.request_template);
+  form.elements.responseTemplate.value = safePrettyJson(cfg.response_template);
+  form.elements.enabled.checked = Boolean(cfg.enabled);
+  el("configEditDialog").showModal();
+}
+
+function safePrettyJson(raw) {
+  if (!raw) return "";
+  try {
+    return JSON.stringify(JSON.parse(raw));
+  } catch {
+    return String(raw);
+  }
+}
+
+el("configEditForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.dataset.id;
+  let headers;
+  let requestTemplate;
+  let responseTemplate;
+  try {
+    headers = parseJsonInput(form.elements.headers.value, "headers");
+    requestTemplate = parseJsonInput(form.elements.requestTemplate.value, "requestTemplate");
+    responseTemplate = parseJsonInput(form.elements.responseTemplate.value, "responseTemplate");
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
+  const body = {
+    name: form.elements.name.value,
+    url: form.elements.url.value,
+    method: form.elements.method.value || "POST",
+    enabled: form.elements.enabled.checked,
+  };
+  // undefined = field unchanged (server keeps existing); null = cleared.
+  if (headers !== undefined) body.headers = headers;
+  if (requestTemplate !== undefined) body.requestTemplate = requestTemplate;
+  if (responseTemplate !== undefined) body.responseTemplate = responseTemplate;
+  const newKey = form.elements.apiKey.value.trim();
+  if (newKey) body.apiKey = newKey; // only send when rotating
+  try {
+    await api(`/admin/api-configs/${id}`, { method: "PUT", body: JSON.stringify(body) });
+    el("configEditDialog").close();
+    loadConfigs();
+  } catch (e) {
+    alert(e.message);
+  }
+};
+
+el("configEditCancel").onclick = () => el("configEditDialog").close();
 
 function parseJsonInput(raw, label) {
   const value = (raw || "").trim();
@@ -546,18 +739,16 @@ el("resetPwCancel").onclick = () => el("resetPwDialog").close();
 // ----------------------------------------------------------------- init
 
 function refreshAll() {
-  loadDashboard();
-  loadProviders();
-  loadModels();
-  loadKeys();
-  loadConfigs();
-  loadUsage();
-  loadLogs();
-  loadSettings();
+  // Only refresh the visible tab; other tabs load on demand when selected.
+  const active = document.querySelector("nav button.active");
+  if (active) tabLoaders[active.dataset.tab]?.();
 }
 
 updateAuthUi();
 if (token) {
   refreshAll();
-  setInterval(loadDashboard, 30_000);
+  setInterval(() => {
+    const active = document.querySelector("nav button.active");
+    if (active?.dataset.tab === "dashboard") loadDashboard();
+  }, 30_000);
 }

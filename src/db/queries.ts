@@ -766,3 +766,13 @@ export function purgeExpiredAdminSessions(): void {
     .query("DELETE FROM admin_sessions WHERE expires_at < ?")
     .run(Date.now());
 }
+
+// ---------------------------------------------------------------- log cleanup
+
+/** Deletes usage/audit logs older than the given number of days. */
+export function purgeOldLogs(retentionDays: number): { usage: number; audit: number } {
+  const cutoff = Date.now() - retentionDays * 86_400_000;
+  const usage = getDb().query("DELETE FROM usage_logs WHERE created_at < ?").run(cutoff);
+  const audit = getDb().query("DELETE FROM audit_logs WHERE created_at < ?").run(cutoff);
+  return { usage: usage.changes, audit: audit.changes };
+}

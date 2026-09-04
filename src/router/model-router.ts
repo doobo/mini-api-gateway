@@ -4,9 +4,11 @@ import {
   listModelRoutes,
 } from "../db/queries";
 import type { ProviderRow } from "../db/queries";
-import { notFound } from "../utils/http-error";
+import { notFound, internalError } from "../utils/http-error";
 import { createProvider } from "../providers/factory";
 import type { ProviderConfig } from "../providers/types";
+import { decryptSecret } from "../utils/secretbox";
+import { logger } from "../utils/logger";
 
 export interface ResolvedRoute {
   model: string;
@@ -64,8 +66,31 @@ export function routeProviderConfig(route: ResolvedRoute): ProviderConfig {
     name: route.provider.name,
     type: route.provider.type as ProviderConfig["type"],
     baseUrl: route.provider.base_url,
-    apiKey: route.provider.api_key,
+    // The stored key is encrypted at rest; upstream calls need plaintext.
+    apiKey: runtimeProviderKey(route.provider),
   };
+}
+
+/**
+ * Decrypt the provider key for upstream calls. Fails loudly (502) when the
+ * encryption key is lost/mismatched - silently sending ciphertext as a bearer
+ * token would turn a config problem into mysterious upstream 401s.
+ */
+function runtimeProviderKey(provider: ProviderRow): string | null {
+  if (!provider.api_key) return null;
+  try {
+    return decryptSecret(provider.api_key);
+  } catch (error) {
+    logger.error("provider key decrypt failed", {
+      provider_id: provider.id,
+      provider: provider.name,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw internalError(
+      `Stored API key for provider '${provider.name}' cannot be decrypted - re-enter it in the admin UI (encryption key lost or changed).`,
+      "provider_key_undecryptable",
+    );
+  }
 }
 
 export { createProvider };

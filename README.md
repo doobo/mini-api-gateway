@@ -17,7 +17,9 @@
 - **API Key 认证**：SHA-256 哈希存储、`scope`（ai/api/both）、模型白名单、配置白名单、RPM 内存限流
 - **非 AI HTTP 转发**：`/f/:config`，任意 HTTP API 变成网关上的命名配置，支持简单模板（无模板纯透传）
 - **用量统计**：SQLite 记录 request_id / model / provider / tokens / latency / status，按模型、Provider、API Config 维度统计
-- **Admin API + Web UI**：浏览器完成 Provider / Model / Key / API Config 配置，敏感 Key 默认脱敏，明文查看需 ADMIN_TOKEN 并写审计日志
+- **日志保留**：每日定时清理超过保留期（默认 7 天，`LOG_RETENTION_DAYS` / `LOG_CLEANUP_TIME` 可配）的 usage/audit 日志，也可 `POST /admin/logs/cleanup` 手动触发
+- **密钥加密存储**：Provider 与 API Config 的上游密钥 AES-256-GCM 加密落盘，任何接口均不可回读明文，仅支持轮换（PUT 更新）
+- **Admin API + Web UI**：浏览器完成 Provider / Model / Key / API Config 配置，敏感 Key 默认脱敏且不可查看；Models 页支持 Provider 名称本地搜索选中，API Configs 支持创建后编辑
 - **管理员账号登录**：默认账号 `admin / admin123`（首次启动自动创建，bcrypt 加密存储），支持登录会话、修改密码、密码重置；登录失败等安全事件写入审计日志
 - **Settings 页管理员管理**：Web UI 的 Settings 页可创建/禁用/删除管理员、重置密码（禁止自删与禁用最后一个可用管理员）
 - **安全**：SSRF 防护（默认禁内网地址与 `file://`）、Header 过滤、请求大小限制、超时控制
@@ -70,6 +72,9 @@ const res = await client.chat.completions.create({
 | `ADMIN_DEFAULT_USERNAME` | `admin` | 首次启动创建的默认管理员用户名 |
 | `ADMIN_DEFAULT_PASSWORD` | `admin123` | 默认管理员初始密码（**登录后请立即修改**） |
 | `ADMIN_SESSION_TTL_HOURS` | `24` | 登录会话有效期（小时） |
+| `SECRET_ENCRYPTION_KEY` | 自动生成 | Provider / API Config 密钥落盘加密密钥（base64 32 字节）；未设置时首次启动自动生成到 `data/.secret-key` |
+| `LOG_RETENTION_DAYS` | `7` | usage/audit 日志保留天数，超期每日定时清理；`0` 表示禁用清理 |
+| `LOG_CLEANUP_TIME` | `03:00` | 每日日志清理时间（本地时间 HH:MM） |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `ALLOW_PRIVATE_UPSTREAMS` | 关 | 本机部署 Ollama 等私有上游时设为 `1`（放宽 SSRF 校验） |
 | `REQUEST_SIZE_LIMIT_MB` | `10` | 请求体大小限制 |
@@ -130,15 +135,14 @@ bun run release patch --dry-run  # 预演，不实际改动
 | GET | `/admin/auth/users` | 会话/静态 Token | 管理员用户列表（不含密码哈希） |
 | PUT | `/admin/auth/users/:id` | 会话/静态 Token | 重置指定用户密码 / 启用禁用 |
 | DELETE | `/admin/auth/users/:id` | 会话/静态 Token | 删除管理员用户（保护最后一个可用管理员） |
-| GET/POST/PUT/DELETE | `/admin/providers[...]` | Admin Token | Provider CRUD |
-| GET | `/admin/providers/:id/token` | Admin Token | Provider Key 明文（记审计） |
+| GET/POST/PUT/DELETE | `/admin/providers[...]` | Admin Token | Provider CRUD（Key 只写不可读，PUT 可轮换） |
 | GET/POST/PUT/DELETE | `/admin/models[...]` | Admin Token | Model Alias CRUD |
 | GET/POST/DELETE | `/admin/model-routes[...]` | Admin Token | 多路由 Failover 配置 |
 | GET/POST/DELETE | `/admin/api-keys[...]` | Admin Token | API Key 管理 |
 | GET | `/admin/api-keys/:id/configs` | Admin Token | Key→配置映射 |
-| GET/POST/PUT/DELETE | `/admin/api-configs[...]` | Admin Token | 非 AI 配置 CRUD |
+| GET/POST/PUT/DELETE | `/admin/api-configs[...]` | Admin Token | 非 AI 配置 CRUD（支持创建后再次修改） |
 | GET | `/admin/api-configs/:id/stats` | Admin Token | 按配置统计 |
-| GET | `/admin/api-configs/:id/token` | Admin Token | 配置 Key 明文（记审计） |
+| POST | `/admin/logs/cleanup` | Admin Token | 手动触发日志清理（按保留天数） |
 | GET | `/admin/stats` | Admin Token | 今日统计（请求/Token/错误/延迟） |
 | GET | `/admin/usage` | Admin Token | 用量明细 |
 | GET | `/admin/logs` | Admin Token | 审计日志（Key 查看） |

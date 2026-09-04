@@ -3,7 +3,7 @@
  * Prereq: mock upstream on :5699 (scripts/mock-upstream.ts), gateway on :5630
  * with test seed data. Run via: bun scripts/run-smoke.ts
  */
-const BASE = "http://localhost:5630";
+const BASE = process.env.SMOKE_BASE_URL || "http://localhost:5630";
 
 let pass = 0;
 let fail = 0;
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   {
     const res = await fetch(`${BASE}/`);
     const html = await res.text();
-    check("GET / serves admin UI", res.status === 200 && html.includes("Personal AI Gateway"));
+    check("GET / serves admin UI", res.status === 200 && html.includes("Mini AI Gateway"));
   }
 
   console.log("== API key auth ==");
@@ -384,19 +384,76 @@ async function main(): Promise<void> {
     check("provider list masks keys", status === 200 && json.data.every((p: any) => p.api_key === undefined && p.api_key_masked !== undefined));
   }
   {
+    // Task.md: keys can never be viewed once added. The reveal endpoints are
+    // gone; the list only carries a masked prefix.
     const { status, json } = await req("GET", "/admin/providers/1/token", { admin: true });
-    check("provider token reveal returns plaintext + audit", status === 200 && json?.api_key === "sk-upstream-mock");
+    check("provider key reveal endpoint removed -> 404", status === 404);
+    const list = await req("GET", "/admin/providers", { admin: true });
+    check(
+      "provider list shows masked key only",
+      list.status === 200 &&
+        list.json.data.every((p: any) => p.api_key === undefined && p.has_api_key === true && typeof p.api_key_masked === "string"),
+    );
   }
   {
-    const { status } = await req("GET", "/admin/providers/1/token");
-    check("token reveal without admin -> 401", status === 401);
+    // Task.md: rotate a provider key via PUT without ever reading it back.
+    // Provider 5 (mock-encrypted) was seeded with a stale plaintext key and is
+    // rotated here; afterwards its chat route must authenticate upstream.
+    const rotated = await req("PUT", "/admin/providers/5", {
+      admin: true,
+      body: { apiKey: "sk-upstream-mock" },
+    });
+    check("rotate provider key via PUT -> 200", rotated.status === 200 && rotated.json?.has_api_key === true);
+    const keep = await req("PUT", "/admin/providers/5", {
+      admin: true,
+      body: { name: "mock-encrypted" },
+    });
+    check("update without apiKey keeps stored key", keep.status === 200 && keep.json?.has_api_key === true);
+  }
+  {
+    // Task.md: keys written through the API are encrypted at rest - raw rows
+    // must not contain plaintext. Seed rows stay plaintext on purpose (legacy
+    // passthrough) and are covered by decryptSecret's legacy path.
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const dbPath = process.env.SMOKE_DB_PATH || "./data/smoke.db";
+    const raw = new Database(dbPath, { readonly: true });
+    const prow = raw.query("SELECT api_key FROM providers WHERE name = 'mock-encrypted'").get() as { api_key: string | null };
+    raw.close();
+    check(
+      "rotated provider key encrypted at rest",
+      typeof prow?.api_key === "string" && prow.api_key.startsWith("enc:v1:") && !prow.api_key.includes("sk-upstream-mock"),
+      prow?.api_key?.slice(0, 12),
+    );
+  }
+  {
+    // Task.md: manual log-cleanup trigger + masked key (no reveal) on configs.
+    const clean = await req("POST", "/admin/logs/cleanup", { admin: true });
+    check("manual log cleanup -> 200 with counts", clean.status === 200 && typeof clean.json?.deleted?.usage === "number");
+    const cfgs = await req("GET", "/admin/api-configs", { admin: true });
+    check(
+      "api-config list shows masked key only",
+      cfgs.status === 200 && cfgs.json.data.every((cfg: any) => cfg.api_key === undefined),
+    );
   }
   {
     const { status, json } = await req("GET", "/admin/logs", { admin: true });
     check(
-      "audit log recorded token reveal",
-      status === 200 && json.data.some((l: any) => l.action === "provider_token_reveal"),
+      "audit log records cleanup",
+      status === 200 && json.data.some((l: any) => l.action === "logs_cleanup"),
     );
+  }
+  {
+    // Task.md: API configs must be editable after creation.
+    const edit = await req("PUT", "/admin/api-configs/1", {
+      admin: true,
+      body: { description: "edited-by-smoke", timeoutMs: 8000 },
+    });
+    check("edit api-config -> 200 and fields updated", edit.status === 200 && edit.json?.description === "edited-by-smoke" && edit.json?.timeout_ms === 8000, JSON.stringify(edit.json));
+    const revert = await req("PUT", "/admin/api-configs/1", {
+      admin: true,
+      body: { description: "weather lookup", timeoutMs: 5000 },
+    });
+    check("revert api-config edit -> 200", revert.status === 200);
   }
   {
     const { status, json } = await req("POST", "/admin/api-keys", {
@@ -421,6 +478,40 @@ async function main(): Promise<void> {
   {
     const { status, json } = await req("GET", "/admin/api-keys/1/configs", { admin: true });
     check("key->configs mapping", status === 200 && Array.isArray(json?.data) && json.data.some((cfg: any) => cfg.name === "weather"));
+  }
+
+  console.log("== encrypted key round-trip ==");
+  {
+    // Provider 5's key was rotated via the API (now stored encrypted). Chat
+    // through it must decrypt at runtime and authenticate with the mock upstream.
+    const chat = await req("POST", "/v1/chat/completions", {
+      key: "sk-test-key-123",
+      body: { model: "enc-model", messages: [{ role: "user", content: "Enc" }] },
+    });
+    check(
+      "chat via encrypted-key provider -> 200 (key decrypts at runtime)",
+      chat.status === 200 && chat.json?.choices?.[0]?.message?.content === "echo:Enc",
+      `status ${chat.status} ${JSON.stringify(chat.json)}`,
+    );
+  }
+  {
+    // Rotate the echo config's key via the API (re-stores it encrypted), then
+    // /f/echo echoes the authorization header: proves the forwarded bearer is
+    // the decrypted plaintext, not the enc:v1: ciphertext.
+    const rot = await req("PUT", "/admin/api-configs/2", {
+      admin: true,
+      body: { apiKey: "sk-upstream-mock" },
+    });
+    check("rotate api-config key via PUT -> 200", rot.status === 200 && rot.json?.has_api_key === true, JSON.stringify(rot.json));
+    const fwd = await req("POST", "/f/echo", {
+      key: "sk-test-key-123",
+      body: { probe: true },
+    });
+    check(
+      "forwarded bearer is decrypted plaintext (not enc:v1:)",
+      fwd.status === 200 && fwd.json?.auth === "Bearer sk-upstream-mock",
+      JSON.stringify(fwd.json?.auth),
+    );
   }
 
   console.log("== rate limit ==");

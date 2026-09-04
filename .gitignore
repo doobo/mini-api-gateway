@@ -16,6 +16,10 @@ data/*.db-wal
 data/*.db-journal
 data/backup/
 
+# Auto-generated secret encryption key (secretbox at rest)
+data/.secret-key
+data/.smoke-secret-key
+
 # Logs
 *.log
 logs/

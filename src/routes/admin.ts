@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Context } from "hono";
 import { maskSecret } from "../utils/mask";
+import { encryptSecret, decryptSecret } from "../utils/secretbox";
+import { runCleanupNow } from "../utils/cleanup";
 import { validateUpstreamUrl } from "../utils/ssrf";
 import {
   listProviders, getProvider, createProvider, updateProvider, deleteProvider,
@@ -15,6 +17,13 @@ import {
 import { newApiSecret } from "../utils/id";
 import { sha256Hex } from "../utils/crypto";
 import { badRequest, notFound } from "../utils/http-error";
+import type { AppConfig } from "../config/config";
+
+/** Config handle injected from index.ts for the log-cleanup trigger. */
+let appConfig: AppConfig | null = null;
+export function setAdminConfig(config: AppConfig): void {
+  appConfig = config;
+}
 
 
 export const adminRoutes = new Hono();
@@ -45,7 +54,28 @@ function parseJsonField<T>(value: unknown, field: string): string | null {
 function sourceRow(row: Record<string, unknown>) {
   // Provider/config responses always mask the key (spec sections 26/30).
   const { api_key, ...rest } = row;
-  return { ...rest, api_key_masked: api_key ? maskSecret(String(api_key)) : null };
+  let hasKey = false;
+  let masked: string | null = null;
+  let keyError = false;
+  if (api_key != null && String(api_key) !== "") {
+    try {
+      const plaintext = decryptSecret(String(api_key));
+      hasKey = Boolean(plaintext);
+      masked = hasKey ? maskSecret(plaintext!) : null;
+    } catch {
+      // Encryption key lost/changed: surface an explicit state instead of 500ing
+      // the whole list. The row must be re-entered via the edit dialog.
+      hasKey = true;
+      keyError = true;
+      masked = "(undecryptable)";
+    }
+  }
+  return {
+    ...rest,
+    has_api_key: hasKey,
+    api_key_masked: masked,
+    ...(keyError ? { api_key_error: true } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- stats
@@ -99,7 +129,7 @@ adminRoutes.post("/providers", async (c) => {
     name: body.name,
     type: body.type,
     baseUrl: body.baseUrl,
-    apiKey: body.apiKey ?? null,
+    apiKey: body.apiKey ? encryptSecret(body.apiKey) : null,
     enabled: body.enabled,
   });
   return c.json(sourceRow(row as unknown as Record<string, unknown>), 201);
@@ -125,7 +155,8 @@ adminRoutes.put("/providers/:id", async (c) => {
     name: body.name,
     type: body.type,
     baseUrl: body.baseUrl,
-    apiKey: body.apiKey,
+    // Empty string = user cleared the key; undefined = keep existing.
+    apiKey: body.apiKey === undefined ? undefined : body.apiKey ? encryptSecret(body.apiKey) : null,
     enabled: body.enabled,
   });
   if (!row) throw notFound("Provider not found");
@@ -137,13 +168,8 @@ adminRoutes.delete("/providers/:id", (c) => {
   return c.json({ ok: true });
 });
 
-/** GET /admin/providers/:id/token - reveal plaintext key (admin + audit). */
-adminRoutes.get("/providers/:id/token", (c) => {
-  const row = getProvider(parseIntParam(c, "id"));
-  if (!row) throw notFound("Provider not found");
-  recordAudit("provider_token_reveal", `provider:${row.id} (${row.name})`, clientIp(c));
-  return c.json({ id: row.id, name: row.name, api_key: row.api_key });
-});
+// NOTE: no provider key-reveal endpoint by design (Task.md: keys can be set
+// and rotated, never read back).
 
 // --------------------------------------------------------------- models
 
@@ -326,7 +352,7 @@ adminRoutes.post("/api-configs", async (c) => {
     headers: body.headers ? JSON.stringify(body.headers) : null,
     requestTemplate: body.requestTemplate !== undefined ? JSON.stringify(body.requestTemplate) : null,
     responseTemplate: body.responseTemplate !== undefined ? JSON.stringify(body.responseTemplate) : null,
-    apiKey: body.apiKey ?? null,
+    apiKey: body.apiKey ? encryptSecret(body.apiKey) : null,
     timeoutMs: body.timeoutMs,
     enabled: body.enabled,
   });
@@ -357,7 +383,8 @@ adminRoutes.put("/api-configs/:id", async (c) => {
     headers: body.headers ? JSON.stringify(body.headers) : undefined,
     requestTemplate: body.requestTemplate !== undefined ? JSON.stringify(body.requestTemplate) : undefined,
     responseTemplate: body.responseTemplate !== undefined ? JSON.stringify(body.responseTemplate) : undefined,
-    apiKey: body.apiKey,
+    // Empty string = user cleared the key; undefined = keep existing.
+    apiKey: body.apiKey === undefined ? undefined : body.apiKey ? encryptSecret(body.apiKey) : null,
     timeoutMs: body.timeoutMs,
     enabled: body.enabled,
   });
@@ -384,13 +411,8 @@ adminRoutes.get("/api-configs/:id/stats", (c) => {
   });
 });
 
-/** GET /admin/api-configs/:id/token - reveal plaintext key (admin + audit). */
-adminRoutes.get("/api-configs/:id/token", (c) => {
-  const row = getApiConfig(parseIntParam(c, "id"));
-  if (!row) throw notFound("API config not found");
-  recordAudit("api_config_token_reveal", `api_config:${row.id} (${row.name})`, clientIp(c));
-  return c.json({ id: row.id, name: row.name, api_key: row.api_key });
-});
+// NOTE: no api-config key-reveal endpoint by design (Task.md: keys can be set
+// and rotated, never read back).
 
 /** GET /admin/api-configs/:id/keys - which client keys may call this config. */
 adminRoutes.get("/api-configs/:id/keys", (c) => {
@@ -428,5 +450,13 @@ adminRoutes.get("/usage", (c) => {
 
 adminRoutes.get("/logs", (c) => {
   return c.json({ data: listAuditLogs(Math.min(Number(c.req.query("limit") ?? 100), 1000)) });
+});
+
+/** POST /admin/logs/cleanup - run the retention purge immediately. */
+adminRoutes.post("/logs/cleanup", (c) => {
+  if (!appConfig) throw new Error("admin config not initialized");
+  const deleted = runCleanupNow(appConfig);
+  recordAudit("logs_cleanup", `usage:${deleted.usage},audit:${deleted.audit}`, clientIp(c));
+  return c.json({ ok: true, deleted });
 });
 
