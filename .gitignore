@@ -31,6 +31,9 @@ logs/
 Thumbs.db
 desktop.ini
 
+# Task / notes
+Task.md
+
 # TypeScript incremental build cache
 *.tsbuildinfo
 

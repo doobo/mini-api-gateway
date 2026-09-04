@@ -96,6 +96,23 @@ docker run -d --name ai-gateway \
   mini-api-gateway
 ```
 
+## 发布 Release（Windows exe zip）
+
+发布通过 GitHub Actions 自动完成：打 tag 推送后自动类型检查 → 冒烟测试 → 交叉编译 Windows x64 exe → 打包 zip → 创建 GitHub Release 并附上 zip。
+
+```bash
+# 一条命令完成：bump 版本 → 提交 → 打 tag → 推送 → 触发构建
+bun run release patch          # 0.1.0 -> 0.1.1
+bun run release minor          # 0.1.0 -> 0.2.0
+bun run release major          # 0.1.0 -> 1.0.0
+bun run release 1.2.3          # 指定版本号
+bun run release patch --dry-run  # 预演，不实际改动
+```
+
+也可以在 GitHub 的 **Actions → Release → Run workflow** 页面手动输入版本号（如 `0.2.0`）触发，效果相同。
+
+构建完成后在仓库 **Releases** 页面下载 `mini-api-gateway-vX.Y.Z-win-x64.zip`，解压后运行 `mini-api-gateway.exe` 即可（Web UI 已内嵌，无需 Node/Bun 环境）。脚本要求 git 已配置 `user.name` / `user.email`，也可用环境变量 `RELEASE_GIT_NAME` / `RELEASE_GIT_EMAIL` 指定。
+
 ## API 一览
 
 | 方法 | 路径 | 认证 | 说明 |

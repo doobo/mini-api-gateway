@@ -1,0 +1,131 @@
+name: Release
+
+# Two ways to release:
+#   1. Push a tag (vX.Y.Z) — the recommended path, done by `bun run release <major|minor|patch|X.Y.Z>`
+#   2. Manually from the Actions tab ("Run workflow") with a version input
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 0.2.0 (semver)"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags, so `gh release create` finds tags
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            # Tag push: v0.2.0 -> 0.2.0
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # Normalize: strip an optional leading "v"
+          VERSION="${VERSION#v}"
+
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version '$VERSION' (expected semver, e.g. 0.2.0)"
+            exit 1
+          fi
+
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::warning::Release version $VERSION differs from package.json ($PKG_VERSION); naming the release $VERSION"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Smoke test
+        run: bun scripts/run-smoke.ts
+
+      - name: Build Windows exe (cross-compile win-x64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          bun build src/index.ts --compile --target=bun-windows-x64 \
+            --outfile "dist/mini-api-gateway.exe"
+
+          test -s dist/mini-api-gateway.exe
+          echo "built dist/mini-api-gateway.exe for v${VERSION}"
+
+      - name: Package zip
+        id: zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          ZIP="mini-api-gateway-v${VERSION}-win-x64.zip"
+
+          mkdir -p staging
+          cp dist/mini-api-gateway.exe staging/mini-api-gateway.exe
+
+          cat > staging/README.txt <<EOF
+          mini-api-gateway v${VERSION} (Windows x64)
+
+          Quick start:
+            1. Unzip anywhere
+            2. Set env vars: PORT (default 5630), DATABASE_PATH, ADMIN_TOKEN
+               (see https://github.com/${{ github.repository }}#readme)
+            3. Run: mini-api-gateway.exe
+            4. Open http://localhost:5630 and log in (default admin / admin123)
+          EOF
+
+          (cd staging && zip -q -r "../dist/${ZIP}" .)
+          rm -rf staging
+
+          test -s "dist/${ZIP}"
+          echo "zip=dist/${ZIP}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v${VERSION}"
+          ZIP="${{ steps.zip.outputs.zip }}"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Tag does not exist yet: create it at the current commit
+            gh release create "$TAG" "$ZIP" \
+              --target "$GITHUB_SHA" \
+              --title "v${VERSION}" \
+              --generate-notes
+          else
+            gh release create "$TAG" "$ZIP" \
+              --title "v${VERSION}" \
+              --generate-notes
+          fi

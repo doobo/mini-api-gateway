@@ -8,7 +8,8 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/mini-api-gateway",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "release": "bun scripts/release.ts"
   },
   "dependencies": {
     "hono": "^4.10.7",
