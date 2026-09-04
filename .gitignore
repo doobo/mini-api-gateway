@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# SQLite databases (keep the folder itself via data/.gitkeep)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+data/backup/
+
+# Logs
+*.log
+logs/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Test / coverage
+coverage/

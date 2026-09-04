@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mini-api-gateway</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mini AI Gateway</h1>
+    <div class="auth-row" id="authLoggedOut">
+      <input type="text" id="loginUsername" placeholder="username" autocomplete="username">
+      <input type="password" id="loginPassword" placeholder="password" autocomplete="current-password">
+      <button id="loginBtn">Log in</button>
+    </div>
+    <div class="auth-row hidden" id="authLoggedIn">
+      <span class="auth-user" id="authUser"></span>
+      <button id="changePwBtn" class="secondary">Change password</button>
+      <button id="logoutBtn" class="secondary">Log out</button>
+    </div>
+  </header>
+
+  <div id="loginBanner" class="banner hidden">
+    Default account: <strong>admin / admin123</strong> — change the password after first login.
+  </div>
+
+  <nav>
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="providers">Providers</button>
+    <button data-tab="models">Models</button>
+    <button data-tab="keys">API Keys</button>
+    <button data-tab="configs">API Configs</button>
+    <button data-tab="usage">Usage</button>
+    <button data-tab="logs">Logs</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+
+  <dialog id="resetPwDialog">
+    <h3>Reset password for <span id="resetPwUser"></span></h3>
+    <form id="resetPwForm">
+      <input type="password" name="newPassword" placeholder="new password (min 8 chars)" minlength="8" required autocomplete="new-password">
+      <div class="dialog-actions">
+        <button type="button" id="resetPwCancel" class="secondary">Cancel</button>
+        <button type="submit">Reset</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="changePwDialog">
+    <h3>Change password</h3>
+    <form id="changePwForm">
+      <input type="password" name="currentPassword" placeholder="current password" autocomplete="current-password" required>
+      <input type="password" name="newPassword" placeholder="new password (min 8 chars)" minlength="8" autocomplete="new-password" required>
+      <div class="dialog-actions">
+        <button type="button" id="changePwCancel" class="secondary">Cancel</button>
+        <button type="submit">Update</button>
+      </div>
+    </form>
+  </dialog>
+
+  <main id="mainContent" class="hidden">
+    <!-- Dashboard -->
+    <section id="tab-dashboard" class="tab active">
+      <div class="cards">
+        <div class="card"><div class="card-label">Requests</div><div class="card-value" id="statRequests">-</div></div>
+        <div class="card"><div class="card-label">Tokens</div><div class="card-value" id="statTokens">-</div></div>
+        <div class="card"><div class="card-label">Errors</div><div class="card-value" id="statErrors">-</div></div>
+        <div class="card"><div class="card-label">Avg Latency</div><div class="card-value" id="statLatency">-</div></div>
+      </div>
+      <h2>Models</h2>
+      <table id="modelStatsTable"><thead><tr><th>Model</th><th>Requests</th><th>Tokens</th></tr></thead><tbody></tbody></table>
+      <h2>Recent Requests</h2>
+      <table id="recentTable"><thead><tr><th>Time</th><th>Kind</th><th>Target</th><th>Status</th><th>Latency</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Providers -->
+    <section id="tab-providers" class="tab">
+      <h2>Providers</h2>
+      <form id="providerForm" class="inline-form">
+        <input name="name" placeholder="name" required>
+        <select name="type"><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="compatible">compatible</option></select>
+        <input name="baseUrl" placeholder="https://api.example.com/v1" required>
+        <input name="apiKey" placeholder="API key (optional)">
+        <button type="submit">Add</button>
+      </form>
+      <table id="providersTable"><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Base URL</th><th>Key</th><th>Enabled</th><th></th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Models -->
+    <section id="tab-models" class="tab">
+      <h2>Models (aliases)</h2>
+      <form id="modelForm" class="inline-form">
+        <input name="name" placeholder="alias e.g. gpt" required>
+        <input name="providerId" placeholder="provider id" type="number" required>
+        <input name="upstreamModel" placeholder="upstream model e.g. gpt-5" required>
+        <button type="submit">Add</button>
+      </form>
+      <table id="modelsTable"><thead><tr><th>ID</th><th>Alias</th><th>Provider</th><th>Upstream</th><th>Enabled</th><th></th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- API Keys -->
+    <section id="tab-keys" class="tab">
+      <h2>API Keys</h2>
+      <form id="keyForm" class="inline-form">
+        <input name="name" placeholder="name" required>
+        <select name="scope"><option value="both">both</option><option value="ai">ai</option><option value="api">api</option></select>
+        <input name="rateLimit" placeholder="RPM" type="number" value="60">
+        <button type="submit">Create</button>
+      </form>
+      <div id="newKeyBanner" class="banner hidden"></div>
+      <table id="keysTable"><thead><tr><th>ID</th><th>Name</th><th>Prefix</th><th>Scope</th><th>RPM</th><th>Last Used</th><th></th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- API Configs -->
+    <section id="tab-configs" class="tab">
+      <h2>API Configs (non-AI forwarding)</h2>
+      <form id="configForm" class="grid-form">
+        <input name="name" placeholder="name e.g. weather" required>
+        <input name="url" placeholder="https://api.example.com/weather" required>
+        <input name="method" placeholder="POST" value="POST">
+        <input name="apiKey" placeholder="upstream key (optional)">
+        <input name="headers" placeholder='{"Authorization":"Bearer ..."} (JSON, optional)'>
+        <input name="requestTemplate" placeholder='{"city":"{{body.city}}"} (JSON, optional)'>
+        <input name="responseTemplate" placeholder='{"content":"{{data.result}}"} (JSON, optional)'>
+        <button type="submit">Add</button>
+      </form>
+      <table id="configsTable"><thead><tr><th>ID</th><th>Name</th><th>Method</th><th>URL</th><th>Requests</th><th>Errors</th><th>Key</th><th></th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Usage -->
+    <section id="tab-usage" class="tab">
+      <h2>Recent Usage</h2>
+      <table id="usageTable"><thead><tr><th>Time</th><th>Request ID</th><th>Kind</th><th>Model/Config</th><th>Provider</th><th>Tokens</th><th>Status</th><th>Latency</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Logs -->
+    <section id="tab-logs" class="tab">
+      <h2>Audit Logs (token reveals)</h2>
+      <table id="logsTable"><thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Source IP</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" class="tab">
+      <h2>Admin Users</h2>
+      <form id="adminUserForm" class="inline-form">
+        <input name="username" placeholder="username" required maxlength="64">
+        <input name="password" type="password" placeholder="password (min 8 chars)" minlength="8" required autocomplete="new-password">
+        <button type="submit">Create</button>
+      </form>
+      <table id="adminUsersTable"><thead><tr><th>ID</th><th>Username</th><th>Enabled</th><th>Last Login</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>
+      <p class="hint">Creating a user requires the static <code>ADMIN_TOKEN</code> (sign-in sessions cannot create users). Disabling or deleting the last enabled admin is blocked.</p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
