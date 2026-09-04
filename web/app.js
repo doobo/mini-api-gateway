@@ -170,6 +170,45 @@ function revealButton(path) {
   return btn;
 }
 
+// ------------------------------------------------------------ method select
+
+const COMMON_METHODS = ["POST", "GET", "PUT", "DELETE", "PATCH"];
+
+/**
+ * Wire a method <select> + "Custom…" input pair. Selecting Custom… reveals the
+ * free-text input; picking a common method hides and clears it.
+ */
+function bindMethodSelect(selectEl, customInput) {
+  selectEl.addEventListener("change", () => {
+    const isCustom = selectEl.value === "";
+    customInput.classList.toggle("hidden", !isCustom);
+    if (isCustom) customInput.focus();
+    else customInput.value = "";
+  });
+}
+
+/** Shows the current method: a common one directly, anything else as Custom…. */
+function setMethodValue(selectEl, customInput, method) {
+  const value = (method || "POST").toUpperCase();
+  if (COMMON_METHODS.includes(value)) {
+    selectEl.value = value;
+    customInput.classList.add("hidden");
+    customInput.value = "";
+  } else {
+    selectEl.value = "";
+    customInput.classList.remove("hidden");
+    customInput.value = value;
+  }
+}
+
+/** Resolves the select + optional custom input into the final method string. */
+function getMethodValue(selectEl, customInput) {
+  if (selectEl.value === "") {
+    return (customInput?.value || "").trim().toUpperCase();
+  }
+  return selectEl.value;
+}
+
 function wrapButtons(...buttons) {
   const span = document.createElement("span");
   span.className = "row-actions";
@@ -330,6 +369,7 @@ async function loadModels() {
     }
     const byId = new Map(providerCache.map((p) => [p.id, p]));
     updateProviderDatalist();
+    updateProviderDatalistFor("providerEditOptions");
     const data = await api("/admin/models");
     fillTable(
       "modelsTable",
@@ -341,10 +381,13 @@ async function loadModels() {
           provider ? `${provider.name} (#${provider.id})` : `#${m.provider_id} (missing)`,
           m.upstream_model,
           m.enabled ? "ON" : "OFF",
-          delButton(async () => {
-            await api(`/admin/models/${m.id}`, { method: "DELETE" });
-            loadModels();
-          }),
+          wrapButtons(
+            smallButton("Edit", () => openModelEdit(m)),
+            delButton(async () => {
+              await api(`/admin/models/${m.id}`, { method: "DELETE" });
+              loadModels();
+            }),
+          ),
         ];
       }),
     );
@@ -355,6 +398,17 @@ async function loadModels() {
 
 function updateProviderDatalist() {
   const datalist = el("providerOptions");
+  datalist.innerHTML = "";
+  for (const p of providerCache) {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.label = `#${p.id} · ${p.type}`;
+    datalist.appendChild(opt);
+  }
+}
+
+function updateProviderDatalistFor(datalistId) {
+  const datalist = el(datalistId);
   datalist.innerHTML = "";
   for (const p of providerCache) {
     const opt = document.createElement("option");
@@ -417,6 +471,78 @@ el("modelForm").onsubmit = async (event) => {
     alert(e.message);
   }
 };
+
+// Model edit dialog (prefilled with the row's provider via the same
+// search-by-name + numeric-id pairing used by the create form).
+function openModelEdit(m) {
+  const form = el("modelEditForm");
+  form.dataset.id = m.id;
+  el("modelEditName").textContent = m.name;
+  form.elements.name.value = m.name;
+  const provider = providerCache.find((p) => p.id === m.provider_id);
+  form.elements.providerSearch.value = provider ? provider.name : "";
+  form.elements.providerId.value = m.provider_id;
+  form.elements.upstreamModel.value = m.upstream_model;
+  form.elements.enabled.checked = Boolean(m.enabled);
+  el("modelEditDialog").showModal();
+}
+
+el("modelEditForm").elements.providerSearch.addEventListener("input", (e) => {
+  const query = e.target.value.trim().toLowerCase();
+  updateProviderDatalistFor("providerEditOptions");
+  if (!query) return;
+  const datalist = el("providerEditOptions");
+  datalist.innerHTML = "";
+  for (const p of providerCache) {
+    if (
+      p.name.toLowerCase().includes(query) ||
+      p.type.toLowerCase().includes(query) ||
+      String(p.id) === query
+    ) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.label = `#${p.id} · ${p.type}`;
+      datalist.appendChild(opt);
+    }
+  }
+});
+
+el("modelEditForm").elements.providerSearch.addEventListener("change", (e) => {
+  const selected = providerCache.find(
+    (p) => p.name.toLowerCase() === e.target.value.trim().toLowerCase(),
+  );
+  if (selected) el("modelEditForm").elements.providerId.value = selected.id;
+});
+
+el("modelEditForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.dataset.id;
+  const searchName = (form.elements.providerSearch.value || "").trim().toLowerCase();
+  const picked = providerCache.find((p) => p.name.toLowerCase() === searchName);
+  const providerId = picked ? picked.id : Number(form.elements.providerId.value);
+  if (!providerId) {
+    alert("Pick a provider by name or enter a provider id");
+    return;
+  }
+  try {
+    await api(`/admin/models/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: form.elements.name.value,
+        providerId,
+        upstreamModel: form.elements.upstreamModel.value,
+        enabled: form.elements.enabled.checked,
+      }),
+    });
+    el("modelEditDialog").close();
+    loadModels();
+  } catch (e) {
+    alert(e.message);
+  }
+};
+
+el("modelEditCancel").onclick = () => el("modelEditDialog").close();
 
 // ------------------------------------------------------------- api keys
 
@@ -500,7 +626,7 @@ function openConfigEdit(cfg) {
   el("configEditName").textContent = cfg.name;
   form.elements.name.value = cfg.name;
   form.elements.url.value = cfg.url;
-  form.elements.method.value = cfg.method || "POST";
+  setMethodValue(form.elements.method, form.elements.customMethod, cfg.method);
   form.elements.apiKey.value = "";
   form.elements.apiKey.placeholder = cfg.has_api_key
     ? "new upstream key (leave blank to keep current)"
@@ -539,7 +665,7 @@ el("configEditForm").onsubmit = async (event) => {
   const body = {
     name: form.elements.name.value,
     url: form.elements.url.value,
-    method: form.elements.method.value || "POST",
+    method: getMethodValue(form.elements.method, form.elements.customMethod) || "POST",
     enabled: form.elements.enabled.checked,
   };
   // undefined = field unchanged (server keeps existing); null = cleared.
@@ -569,16 +695,20 @@ function parseJsonInput(raw, label) {
   }
 }
 
+bindMethodSelect(el("configMethod"), el("configCustomMethod"));
+bindMethodSelect(el("configEditMethod"), el("configEditCustomMethod"));
+
 el("configForm").onsubmit = async (event) => {
   event.preventDefault();
   const form = new FormData(event.target);
+  const method = getMethodValue(el("configMethod"), el("configCustomMethod")) || "POST";
   try {
     await api("/admin/api-configs", {
       method: "POST",
       body: JSON.stringify({
         name: form.get("name"),
         url: form.get("url"),
-        method: form.get("method") || "POST",
+        method,
         apiKey: form.get("apiKey") || null,
         headers: parseJsonInput(form.get("headers"), "headers"),
         requestTemplate: parseJsonInput(form.get("requestTemplate"), "requestTemplate"),

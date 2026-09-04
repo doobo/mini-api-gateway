@@ -69,7 +69,8 @@ dialog h3 { margin: 0 0 12px; font-size: 15px; }
 
 dialog form { display: grid; gap: 10px; }
 
-dialog input {
+dialog input,
+dialog select {
   padding: 7px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -184,7 +185,8 @@ button.danger { background: var(--danger); }
   margin-bottom: 14px;
 }
 
-.grid-form input {
+.grid-form input,
+.grid-form select {
   padding: 7px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -203,6 +205,10 @@ button.danger { background: var(--danger); }
 }
 
 .hidden { display: none; }
+
+.inline-form .hidden,
+.grid-form .hidden,
+dialog .hidden { display: none; }
 
 .hint {
   font-size: 12px;

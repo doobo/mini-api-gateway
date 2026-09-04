@@ -182,12 +182,15 @@ export function createAdminAuthRoutes(config: AppConfig) {
     password: z.string().min(8),
   });
 
+  // Any authenticated admin may create users: a logged-in admin session or the
+  // static ADMIN_TOKEN (kept for scripted workflows). The old restriction to
+  // ADMIN_TOKEN-only blocked the Settings UI for session logins (Task.md).
   adminAuthRoutes.post("/users", async (c) => {
     const auth = getAdminAuth(c);
-    if (auth.via !== "token") {
+    if (!auth || (!auth.user && auth.via !== "token")) {
       throw badRequest(
-        "Creating admin users requires the static ADMIN_TOKEN",
-        "create_user_requires_admin_token",
+        "Creating admin users requires an authenticated admin (login session or ADMIN_TOKEN)",
+        "create_user_requires_admin_auth",
       );
     }
     const body = createUserSchema.parse(await c.req.json());

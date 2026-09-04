@@ -479,6 +479,35 @@ async function main(): Promise<void> {
     const { status, json } = await req("GET", "/admin/api-keys/1/configs", { admin: true });
     check("key->configs mapping", status === 200 && Array.isArray(json?.data) && json.data.some((cfg: any) => cfg.name === "weather"));
   }
+  {
+    // Task.md: creating a model with an existing alias returns a friendly 400
+    // (code duplicate_model) instead of a raw 500 from the UNIQUE constraint.
+    const dup = await req("POST", "/admin/models", {
+      admin: true,
+      body: { name: "gpt", providerId: 1, upstreamModel: "whatever" },
+    });
+    check(
+      "duplicate model alias -> 400 duplicate_model",
+      dup.status === 400 && dup.json?.error?.code === "duplicate_model",
+      `status ${dup.status} ${JSON.stringify(dup.json)}`,
+    );
+  }
+  {
+    // Task.md: a session-logged-in admin (not only the static ADMIN_TOKEN)
+    // can create admin users from the Settings UI.
+    const login = await req("POST", "/admin/auth/login", {
+      body: { username: "admin", password: "admin123" },
+    });
+    const tok = login.json?.token ?? "";
+    const created = await req("POST", "/admin/auth/users", {
+      key: tok,
+      body: { username: "session-op", password: "session-op-pass-1" },
+    });
+    check("session admin creates user -> 201", created.status === 201, `status ${created.status}`);
+    const removed = await req("DELETE", `/admin/auth/users/${created.json?.id}`, { key: tok });
+    check("cleanup session-created user -> 200", removed.status === 200, `status ${removed.status}`);
+    await req("POST", "/admin/auth/logout", { key: tok });
+  }
 
   console.log("== encrypted key round-trip ==");
   {

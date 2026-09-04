@@ -183,6 +183,18 @@ export function getModelByName(name: string): ModelRow | undefined {
     .get(name) as ModelRow | undefined;
 }
 
+/** Duplicate check for create/update: matches any row regardless of enabled. */
+export function findModelByName(name: string, excludeId?: number): ModelRow | undefined {
+  if (excludeId !== undefined) {
+    return getDb()
+      .query("SELECT * FROM models WHERE name = ? AND id != ?")
+      .get(name, excludeId) as ModelRow | undefined;
+  }
+  return getDb()
+    .query("SELECT * FROM models WHERE name = ?")
+    .get(name) as ModelRow | undefined;
+}
+
 export function getModel(id: number): ModelRow | undefined {
   return getDb().query("SELECT * FROM models WHERE id = ?").get(id) as ModelRow | undefined;
 }

@@ -22,7 +22,7 @@
   </header>
 
   <div id="loginBanner" class="banner hidden">
-    Default account: <strong>admin / admin123</strong> — change the password after first login.
+    Signed out. Enter your admin username and password to continue.
   </div>
 
   <nav>
@@ -67,7 +67,15 @@
     <form id="configEditForm" data-id="">
       <input name="name" placeholder="name" required>
       <input name="url" placeholder="https://api.example.com/weather" required>
-      <input name="method" placeholder="POST" value="POST">
+      <select name="method" id="configEditMethod">
+        <option value="POST">POST</option>
+        <option value="GET">GET</option>
+        <option value="PUT">PUT</option>
+        <option value="DELETE">DELETE</option>
+        <option value="PATCH">PATCH</option>
+        <option value="">Custom…</option>
+      </select>
+      <input name="customMethod" id="configEditCustomMethod" placeholder="custom method" class="hidden" maxlength="16">
       <input name="apiKey" placeholder="upstream key (leave blank to keep)">
       <input name="headers" placeholder='{"Authorization":"Bearer ..."} (JSON, optional)'>
       <input name="requestTemplate" placeholder='{"city":"{{body.city}}"} (JSON, optional)'>
@@ -75,6 +83,22 @@
       <label class="check-row"><input type="checkbox" name="enabled"> enabled</label>
       <div class="dialog-actions">
         <button type="button" id="configEditCancel" class="secondary">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="modelEditDialog">
+    <h3>Edit model <span id="modelEditName"></span></h3>
+    <form id="modelEditForm" data-id="">
+      <input name="name" placeholder="alias e.g. gpt" required>
+      <input name="providerSearch" placeholder="search provider..." autocomplete="off" list="providerEditOptions">
+      <datalist id="providerEditOptions"></datalist>
+      <input name="providerId" placeholder="provider id" type="number" required>
+      <input name="upstreamModel" placeholder="upstream model e.g. gpt-5" required>
+      <label class="check-row"><input type="checkbox" name="enabled"> enabled</label>
+      <div class="dialog-actions">
+        <button type="button" id="modelEditCancel" class="secondary">Cancel</button>
         <button type="submit">Save</button>
       </div>
     </form>
@@ -132,7 +156,7 @@
         <button type="submit">Add</button>
       </form>
       <table id="modelsTable"><thead><tr><th>ID</th><th>Alias</th><th>Provider</th><th>Upstream</th><th>Enabled</th><th></th></tr></thead><tbody></tbody></table>
-      <p class="hint">Tip: start typing in the provider box to filter the dropdown locally.</p>
+      <p class="hint">Tip: start typing in the provider box to filter the dropdown locally. Model aliases must be unique.</p>
     </section>
 
     <!-- API Keys -->
@@ -154,7 +178,15 @@
       <form id="configForm" class="grid-form">
         <input name="name" placeholder="name e.g. weather" required>
         <input name="url" placeholder="https://api.example.com/weather" required>
-        <input name="method" placeholder="POST" value="POST">
+        <select name="method" id="configMethod">
+          <option value="POST">POST</option>
+          <option value="GET">GET</option>
+          <option value="PUT">PUT</option>
+          <option value="DELETE">DELETE</option>
+          <option value="PATCH">PATCH</option>
+          <option value="">Custom…</option>
+        </select>
+        <input name="customMethod" id="configCustomMethod" placeholder="custom method" class="hidden" maxlength="16">
         <input name="apiKey" placeholder="upstream key (optional)">
         <input name="headers" placeholder='{"Authorization":"Bearer ..."} (JSON, optional)'>
         <input name="requestTemplate" placeholder='{"city":"{{body.city}}"} (JSON, optional)'>
@@ -185,7 +217,7 @@
         <button type="submit">Create</button>
       </form>
       <table id="adminUsersTable"><thead><tr><th>ID</th><th>Username</th><th>Enabled</th><th>Last Login</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>
-      <p class="hint">Creating a user requires the static <code>ADMIN_TOKEN</code> (sign-in sessions cannot create users). Disabling or deleting the last enabled admin is blocked.</p>
+      <p class="hint">Any signed-in admin can create users. Disabling or deleting the last enabled admin is blocked.</p>
     </section>
   </main>
 

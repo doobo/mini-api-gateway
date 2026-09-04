@@ -7,7 +7,7 @@ import { runCleanupNow } from "../utils/cleanup";
 import { validateUpstreamUrl } from "../utils/ssrf";
 import {
   listProviders, getProvider, createProvider, updateProvider, deleteProvider,
-  listModels, getModel, createModel, updateModel, deleteModel,
+  listModels, getModel, getModelByName, findModelByName, createModel, updateModel, deleteModel,
   listApiKeys, getApiKey, createApiKey, deleteApiKey,
   listApiConfigs, getApiConfig, getApiConfigByName, createApiConfig, updateApiConfig, deleteApiConfig,
   listUsageLogs, listAuditLogs, recordAudit,
@@ -188,6 +188,10 @@ adminRoutes.get("/models", (c) => {
 adminRoutes.post("/models", async (c) => {
   const body = modelCreateSchema.parse(await c.req.json());
   if (!getProvider(body.providerId)) throw badRequest(`Provider ${body.providerId} does not exist`);
+  // Friendly duplicate rejection instead of a raw 500 from the UNIQUE constraint.
+  if (findModelByName(body.name)) {
+    throw badRequest(`Model alias '${body.name}' already exists`, "duplicate_model");
+  }
   const row = createModel(body);
   return c.json(row, 201);
 });
@@ -203,6 +207,9 @@ adminRoutes.put("/models/:id", async (c) => {
   const body = modelCreateSchema.partial().parse(await c.req.json());
   if (body.providerId && !getProvider(body.providerId)) {
     throw badRequest(`Provider ${body.providerId} does not exist`);
+  }
+  if (body.name !== undefined && findModelByName(body.name, id)) {
+    throw badRequest(`Model alias '${body.name}' already exists`, "duplicate_model");
   }
   const row = updateModel(id, body);
   if (!row) throw notFound("Model not found");
