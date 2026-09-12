@@ -189,6 +189,20 @@ h2 {
   margin: 0;
 }
 
+/* Footer row of a panel: paging controls left, status text right. */
+.panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-top: 10px;
+}
+
+.panel-foot .hint {
+  margin: 0;
+  text-align: right;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

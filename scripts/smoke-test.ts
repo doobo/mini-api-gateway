@@ -130,6 +130,30 @@ async function main(): Promise<void> {
     check("invalid messages -> 400", status === 400);
   }
 
+  {
+    // Regression: the validating schema used to strip every parameter the
+    // gateway does not model before forwarding, silently breaking tool calling
+    // / JSON mode / sampling params.
+    const { status, json } = await req("POST", "/v1/chat/completions", {
+      key: "sk-test-key-123",
+      body: {
+        model: "passthrough",
+        messages: [{ role: "user", content: "Hi" }],
+        top_p: 0.5,
+        tools: [{ type: "function", function: { name: "get_weather" } }],
+        response_format: { type: "json_object" },
+        stop: ["\n"],
+        n: 2,
+        user: "smoke",
+      },
+    });
+    const received = String(json?.choices?.[0]?.message?.content ?? "");
+    const forwarded = ["top_p", "tools", "response_format", "stop", "n", "user"].every((k) =>
+      received.includes(k),
+    );
+    check("chat forwards unmodelled params upstream", status === 200 && forwarded, received);
+  }
+
   console.log("== streaming ==");
   {
     const res = await fetch(`${BASE}/v1/chat/completions`, {
@@ -213,6 +237,46 @@ async function main(): Promise<void> {
       "passthrough forwards body+query",
       status === 200 && json?.body?.hello === "world" && json?.query?.x === "1" && json?.method === "POST",
       JSON.stringify(json),
+    );
+  }
+
+  {
+    // Regression: /f/* used to have no body size limit at all.
+    const tooBig = "x".repeat(1_200_000); // smoke run sets REQUEST_SIZE_LIMIT_MB=1
+    const fwd = await req("POST", "/f/echo", { key: "sk-test-key-123", body: { pad: tooBig } });
+    check(
+      "oversized body on /f/* -> 400",
+      fwd.status === 400 && fwd.json?.error?.code === "request_too_large",
+      `status ${fwd.status}`,
+    );
+    const chat = await req("POST", "/v1/chat/completions", {
+      key: "sk-test-key-123",
+      body: { model: "gpt", messages: [{ role: "user", content: tooBig }] },
+    });
+    check(
+      "oversized body on /v1/* -> 400",
+      chat.status === 400 && chat.json?.error?.code === "request_too_large",
+      `status ${chat.status}`,
+    );
+  }
+
+  {
+    // Cookies belong to this gateway's own origin and must never leak to a
+    // third-party upstream.
+    const res = await fetch(`${BASE}/f/echo`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sk-test-key-123",
+        "content-type": "application/json",
+        cookie: "adminToken=leaked-session-value",
+      },
+      body: JSON.stringify({ a: 1 }),
+    });
+    const json: any = await res.json();
+    check(
+      "client cookie is not forwarded upstream",
+      res.status === 200 && json?.cookie === null,
+      JSON.stringify(json?.cookie),
     );
   }
 
@@ -456,6 +520,36 @@ async function main(): Promise<void> {
     check("revert api-config edit -> 200", revert.status === 200);
   }
   {
+    // The hot path caches API key / api-config lookups, so a mutation must
+    // invalidate them immediately rather than after the TTL - especially for
+    // key revocation, where a stale cache would keep a deleted key working.
+    const created = await req("POST", "/admin/api-keys", {
+      admin: true,
+      body: { name: "cache-probe", rateLimit: 60 },
+    });
+    const key = created.json?.key as string;
+    const first = await req("GET", "/v1/models", { key });
+    const second = await req("GET", "/v1/models", { key }); // warms the cache
+    await req("DELETE", `/admin/api-keys/${created.json?.id}`, { admin: true });
+    const revoked = await req("GET", "/v1/models", { key });
+    check(
+      "deleted API key is rejected immediately (cache invalidation)",
+      first.status === 200 && second.status === 200 && revoked.status === 401,
+      `first ${first.status}, second ${second.status}, after delete ${revoked.status}`,
+    );
+
+    // Same for api_configs on the /f/* path (config 2 = echo): flipping the
+    // upstream method must be visible on the very next forward.
+    const put = await req("PUT", "/admin/api-configs/2", { admin: true, body: { method: "GET" } });
+    const fwd = await req("POST", "/f/echo", { key: "sk-test-key-123", body: { a: 1 } });
+    const revert = await req("PUT", "/admin/api-configs/2", { admin: true, body: { method: "POST" } });
+    check(
+      "api-config update takes effect immediately (cache invalidation)",
+      put.status === 200 && fwd.json?.method === "GET" && revert.status === 200,
+      `upstream saw ${fwd.json?.method}`,
+    );
+  }
+  {
     const { status, json } = await req("POST", "/admin/api-keys", {
       admin: true,
       body: { name: "smoke-created", scope: "both", rateLimit: 10 },
@@ -543,6 +637,38 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log("== admin payload validation ==");
+  {
+    // Regression: ZodError used to fall through app.onError as a 500.
+    const bad = await req("POST", "/admin/providers", {
+      admin: true,
+      body: { name: "bad-provider", type: "not-a-type", baseUrl: "https://example.com" },
+    });
+    check(
+      "invalid provider type -> 400 (not 500)",
+      bad.status === 400 && bad.json?.error?.type === "invalid_request_error",
+      `status ${bad.status}`,
+    );
+    const missing = await req("POST", "/admin/providers", { admin: true, body: { name: "no-type" } });
+    check(
+      "missing required field -> 400 naming the field",
+      missing.status === 400 && String(missing.json?.error?.message).includes("type"),
+      `status ${missing.status} ${missing.json?.error?.message}`,
+    );
+  }
+
+  console.log("== admin API is same-origin only ==");
+  {
+    // The OPTIONS bypass was removed: a cross-origin preflight must not be
+    // answered anonymously.
+    const preflight = await fetch(`${BASE}/admin/providers`, { method: "OPTIONS" });
+    check(
+      "OPTIONS /admin/providers -> 401 (no anonymous CORS bypass)",
+      preflight.status === 401,
+      `status ${preflight.status}`,
+    );
+  }
+
   console.log("== rate limit ==");
   {
     // fresh key with rate_limit=2
@@ -555,6 +681,20 @@ async function main(): Promise<void> {
     const s2 = await req("GET", "/v1/models", { key });
     const s3 = await req("GET", "/v1/models", { key });
     check("rate limit: first two ok, third 429", s1.status === 200 && s2.status === 200 && s3.status === 429, `statuses ${s1.status},${s2.status},${s3.status}`);
+  }
+
+  // Last: this intentionally exhausts the per-IP login budget, which would
+  // break any login test that ran after it.
+  console.log("== admin login throttle ==");
+  {
+    let last = 0;
+    for (let i = 0; i < 11; i++) {
+      const { status } = await req("POST", "/admin/auth/login", {
+        body: { username: "admin", password: "definitely-wrong" },
+      });
+      last = status;
+    }
+    check("repeated failed logins -> 429", last === 429, `status ${last}`);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,5 +1,28 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { getDb } from "./db";
+import { cached, invalidateCache } from "./cache";
+
+/**
+ * TTL for hot-path reads (provider/model/routes/api-key lookups). Mutators
+ * invalidate explicitly, so this only bounds staleness from out-of-band edits.
+ */
+const HOT_CACHE_TTL_MS = 5_000;
+
+/**
+ * `last_used_at` is informational and was previously written on every single
+ * request, which put a DB write in front of every proxied call. One write per
+ * key per minute is plenty for the admin UI.
+ */
+const LAST_USED_WRITE_INTERVAL_MS = 60_000;
+const lastUsedWrites = new Map<number, number>();
+
+/**
+ * Expired sessions are already rejected by the auth check (it compares
+ * expires_at), so purging is pure garbage collection - no need to run a DELETE
+ * on every admin request.
+ */
+const SESSION_PURGE_INTERVAL_MS = 5 * 60_000;
+let lastSessionPurge = 0;
 
 export interface ProviderRow {
   id: number;
@@ -113,9 +136,9 @@ export function listProviders(): ProviderRow[] {
 }
 
 export function getProvider(id: number): ProviderRow | undefined {
-  return getDb().query("SELECT * FROM providers WHERE id = ?").get(id) as
-    | ProviderRow
-    | undefined;
+  return cached(`provider:${id}`, HOT_CACHE_TTL_MS, () =>
+    getDb().query("SELECT * FROM providers WHERE id = ?").get(id) as ProviderRow | undefined,
+  );
 }
 
 export function createProvider(data: {
@@ -132,6 +155,7 @@ export function createProvider(data: {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(data.name, data.type, data.baseUrl, data.apiKey, data.enabled ? 1 : 0, now, now);
+  invalidateCache();
   return getProvider(Number(result.lastInsertRowid))!;
 }
 
@@ -163,11 +187,13 @@ export function updateProvider(
       now,
       id,
     );
+  invalidateCache();
   return getProvider(id);
 }
 
 export function deleteProvider(id: number): boolean {
   const result = getDb().query("DELETE FROM providers WHERE id = ?").run(id);
+  invalidateCache();
   return result.changes > 0;
 }
 
@@ -178,9 +204,11 @@ export function listModels(): ModelRow[] {
 }
 
 export function getModelByName(name: string): ModelRow | undefined {
-  return getDb()
-    .query("SELECT * FROM models WHERE name = ? AND enabled = 1")
-    .get(name) as ModelRow | undefined;
+  return cached(`model:${name}`, HOT_CACHE_TTL_MS, () =>
+    getDb()
+      .query("SELECT * FROM models WHERE name = ? AND enabled = 1")
+      .get(name) as ModelRow | undefined,
+  );
 }
 
 /** Duplicate check for create/update: matches any row regardless of enabled. */
@@ -212,6 +240,7 @@ export function createModel(data: {
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(data.name, data.providerId, data.upstreamModel, data.enabled ? 1 : 0, data.priority, Date.now());
+  invalidateCache();
   return getModel(Number(result.lastInsertRowid))!;
 }
 
@@ -241,11 +270,13 @@ export function updateModel(
       data.priority ?? existing.priority,
       id,
     );
+  invalidateCache();
   return getModel(id);
 }
 
 export function deleteModel(id: number): boolean {
   const result = getDb().query("DELETE FROM models WHERE id = ?").run(id);
+  invalidateCache();
   return result.changes > 0;
 }
 
@@ -259,6 +290,22 @@ export function listModelRoutes(): ModelRouteRow[] {
        ORDER BY priority ASC, weight DESC`,
     )
     .all() as ModelRouteRow[];
+}
+
+/**
+ * Routes for one alias. The chat handler used to fetch the whole table and
+ * filter in JS on every request; this keeps the hot path to one indexed read.
+ */
+export function listModelRoutesFor(modelName: string): ModelRouteRow[] {
+  return cached(`routes:${modelName}`, HOT_CACHE_TTL_MS, () =>
+    getDb()
+      .query(
+        `SELECT * FROM model_routes
+         WHERE model_name = ? AND enabled = 1
+         ORDER BY priority ASC, weight DESC`,
+      )
+      .all(modelName) as ModelRouteRow[],
+  );
 }
 
 export function createModelRoute(data: {
@@ -282,6 +329,7 @@ export function createModelRoute(data: {
       data.weight ?? 100,
       (data.enabled ?? true) ? 1 : 0,
     );
+  invalidateCache();
   return getDb()
     .query("SELECT * FROM model_routes WHERE id = ?")
     .get(Number(result.lastInsertRowid)) as ModelRouteRow;
@@ -289,15 +337,18 @@ export function createModelRoute(data: {
 
 export function deleteModelRoute(id: number): boolean {
   const result = getDb().query("DELETE FROM model_routes WHERE id = ?").run(id);
+  invalidateCache();
   return result.changes > 0;
 }
 
 // ------------------------------------------------------------------ api keys
 
 export function getApiKeyByHash(hash: string): ApiKeyRow | undefined {
-  return getDb()
-    .query("SELECT * FROM api_keys WHERE key_hash = ?")
-    .get(hash) as ApiKeyRow | undefined;
+  return cached(`apikey:${hash}`, HOT_CACHE_TTL_MS, () =>
+    getDb()
+      .query("SELECT * FROM api_keys WHERE key_hash = ?")
+      .get(hash) as ApiKeyRow | undefined,
+  );
 }
 
 export function listApiKeys(): ApiKeyRow[] {
@@ -336,17 +387,27 @@ export function createApiKey(data: {
       data.expiresAt,
       Date.now(),
     );
+  invalidateCache();
   return getApiKey(Number(result.lastInsertRowid))!;
 }
 
-export function updateApiKeyLastUsed(id: number): void {
-  getDb()
-    .query("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
-    .run(Date.now(), id);
+/**
+ * Records key usage for the admin UI, throttled to one write per key per
+ * minute (see LAST_USED_WRITE_INTERVAL_MS). Not invalidating the cache here is
+ * deliberate: last_used_at is never read from the cached auth path, and
+ * invalidating would throw the key cache away on every request.
+ */
+export function markApiKeyUsed(id: number): void {
+  const now = Date.now();
+  const lastWrite = lastUsedWrites.get(id) ?? 0;
+  if (now - lastWrite < LAST_USED_WRITE_INTERVAL_MS) return;
+  lastUsedWrites.set(id, now);
+  getDb().query("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(now, id);
 }
 
 export function deleteApiKey(id: number): boolean {
   const result = getDb().query("DELETE FROM api_keys WHERE id = ?").run(id);
+  invalidateCache();
   return result.changes > 0;
 }
 
@@ -363,9 +424,11 @@ export function getApiConfig(id: number): ApiConfigRow | undefined {
 }
 
 export function getApiConfigByName(name: string): ApiConfigRow | undefined {
-  return getDb()
-    .query("SELECT * FROM api_configs WHERE name = ? AND enabled = 1")
-    .get(name) as ApiConfigRow | undefined;
+  return cached(`apiconfig:${name}`, HOT_CACHE_TTL_MS, () =>
+    getDb()
+      .query("SELECT * FROM api_configs WHERE name = ? AND enabled = 1")
+      .get(name) as ApiConfigRow | undefined,
+  );
 }
 
 export function createApiConfig(data: {
@@ -400,6 +463,7 @@ export function createApiConfig(data: {
       now,
       now,
     );
+  invalidateCache();
   return getApiConfig(Number(result.lastInsertRowid))!;
 }
 
@@ -443,11 +507,13 @@ export function updateApiConfig(
       now,
       id,
     );
+  invalidateCache();
   return getApiConfig(id);
 }
 
 export function deleteApiConfig(id: number): boolean {
   const result = getDb().query("DELETE FROM api_configs WHERE id = ?").run(id);
+  invalidateCache();
   return result.changes > 0;
 }
 
@@ -772,11 +838,18 @@ export function deleteAdminSessionsForUser(adminUserId: number): void {
     .run(adminUserId);
 }
 
-/** Purges expired sessions; called opportunistically on login/auth. */
+/**
+ * Purges expired sessions; called opportunistically from the auth middleware
+ * but throttled, so it costs at most one DELETE per SESSION_PURGE_INTERVAL_MS
+ * instead of one per admin request.
+ */
 export function purgeExpiredAdminSessions(): void {
+  const now = Date.now();
+  if (now - lastSessionPurge < SESSION_PURGE_INTERVAL_MS) return;
+  lastSessionPurge = now;
   getDb()
     .query("DELETE FROM admin_sessions WHERE expires_at < ?")
-    .run(Date.now());
+    .run(now);
 }
 
 // ---------------------------------------------------------------- log cleanup

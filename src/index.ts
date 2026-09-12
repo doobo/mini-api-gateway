@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { ZodError } from "zod";
 import { loadConfig } from "./config/config";
 import { setLogLevel, logger } from "./utils/logger";
 import { openDatabase, closeDatabase } from "./db/db";
@@ -7,10 +8,11 @@ import { requestLog } from "./middleware/request-log";
 import { apiKeyAuth } from "./middleware/auth";
 import { createAdminAuthMiddleware } from "./middleware/admin-auth";
 import { RateLimitError } from "./middleware/rate-limit";
+import { bodyLimit, readBodyText } from "./middleware/body-limit";
 import { ApiError, errorResponse, internalError, unauthorized, badRequest } from "./utils/http-error";
-import { chatRoutes } from "./routes/chat";
+import { createChatRoutes } from "./routes/chat";
 import { modelRoutes } from "./routes/models";
-import { forwardRoutes } from "./routes/forward";
+import { createForwardRoutes } from "./routes/forward";
 import { adminRoutes, setAdminConfig } from "./routes/admin";
 import { createAdminAuthRoutes } from "./routes/admin-auth";
 import { ensureAdminUser } from "./db/queries";
@@ -55,13 +57,14 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 const v1 = new Hono();
 
-// Parse (and size-limit) JSON bodies once; handlers read c.get("chatBody").
+// Reject oversized requests from Content-Length before anything else runs.
+v1.use("*", bodyLimit(config));
+
+// Parse JSON bodies once; handlers read c.get("chatBody"). Bodies without a
+// Content-Length are still capped while streaming by readBodyText.
 v1.use("*", async (c, next) => {
   if (c.req.method === "POST") {
-    const raw = await c.req.text();
-    if (raw.length > config.requestSizeLimitBytes) {
-      throw badRequest("Request body too large", "request_too_large");
-    }
+    const raw = await readBodyText(c);
     if (raw) {
       // SyntaxError on invalid JSON is mapped to 400 by app.onError.
       c.set("chatBody", JSON.parse(raw));
@@ -71,14 +74,16 @@ v1.use("*", async (c, next) => {
 });
 
 v1.use("*", apiKeyAuth);
-v1.route("/", chatRoutes);
+v1.route("/", createChatRoutes(config));
 v1.route("/", modelRoutes);
 app.route("/v1", v1);
 
 // --------------------------------------------------------- forward /f/*
 
+// Same size limit as /v1/*: forwarding paths read the body too.
+app.use("/f/*", bodyLimit(config));
 app.use("/f/*", apiKeyAuth);
-app.route("/f", forwardRoutes);
+app.route("/f", createForwardRoutes(config));
 
 // --------------------------------------------------------- admin routes
 
@@ -109,6 +114,14 @@ app.onError((error, c) => {
       { error: { message: "Rate limit exceeded", type: "rate_limit_error", code: "rate_limit_exceeded" } },
       429,
     );
+  }
+  if (error instanceof ZodError) {
+    // Schema validation in the admin routes. Report the offending fields as a
+    // 400 instead of letting a bad payload surface as a 500.
+    const detail = error.issues
+      .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+      .join("; ");
+    return c.json(errorResponse(badRequest(`Invalid request: ${detail}`)), 400);
   }
   if (error instanceof SyntaxError) {
     // Invalid JSON body.

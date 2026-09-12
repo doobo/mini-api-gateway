@@ -33,6 +33,14 @@ export class RateLimiter {
     bucket.timestamps.push(now);
   }
 
+  /**
+   * Drop a bucket entirely. Used where a bucket tracks *failures*: a
+   * successful login clears the client's failure count.
+   */
+  reset(key: string): void {
+    this.buckets.delete(key);
+  }
+
   private maybeCleanup(now: number): void {
     if (now - this.lastCleanup < WINDOW_MS) return;
     this.lastCleanup = now;

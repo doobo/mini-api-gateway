@@ -1,7 +1,7 @@
 import type { Context, Next } from "hono";
 import { sha256Hex } from "../utils/crypto";
 import { forbidden, unauthorized } from "../utils/http-error";
-import { getApiKeyByHash, updateApiKeyLastUsed } from "../db/queries";
+import { getApiKeyByHash, markApiKeyUsed } from "../db/queries";
 import type { ApiKeyRow } from "../db/queries";
 import { rateLimiter } from "./rate-limit";
 
@@ -72,7 +72,7 @@ export async function apiKeyAuth(c: Context, next: Next) {
 
   rateLimiter.check(`key:${keyRow.id}`, keyRow.rate_limit || 60);
 
-  updateApiKeyLastUsed(keyRow.id);
+  markApiKeyUsed(keyRow.id);
   c.set(AUTH_CONTEXT_KEY, { apiKey: keyRow });
   await next();
 }

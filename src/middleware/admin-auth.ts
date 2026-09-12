@@ -40,13 +40,16 @@ function extractBearer(header: string | undefined): string | null {
  * Admin API auth (spec sections 30/31):
  * accepts either a login session token (POST /admin/auth/login) or the
  * static ADMIN_TOKEN. Sessions are DB-backed, hashed at rest, and expire.
- * Only POST /admin/auth/login is public (and OPTIONS for CORS preflight).
+ *
+ * Only POST /admin/auth/login is public. The admin API is deliberately
+ * same-origin: the UI is served by this same process, so no CORS preflight
+ * is accommodated and OPTIONS authenticates like any other method.
  */
 export function createAdminAuthMiddleware(config: AppConfig) {
   return async function adminAuth(c: Context, next: Next) {
     const path = c.req.path.replace(/\\/g, "/");
     const isLogin = path.endsWith("/auth/login");
-    if (c.req.method === "OPTIONS" || (isLogin && c.req.method === "POST")) {
+    if (isLogin && c.req.method === "POST") {
       return next();
     }
 

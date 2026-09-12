@@ -14,13 +14,15 @@ export interface AppConfig {
   adminToken: string;
   logLevel: "debug" | "info" | "warn" | "error";
   requestSizeLimitBytes: number;
-  connectTimeoutMs: number;
+  /** Hard timeout for upstream calls (non-streaming chat and /f/* defaults). */
   requestTimeoutMs: number;
+  /** How long an SSE stream may go without a chunk before it is closed. */
   streamIdleTimeoutMs: number;
-  defaultTimeoutMs: number;
   adminDefaultUsername: string;
   adminDefaultPassword: string;
   adminSessionTtlMs: number;
+  /** Failed admin logins allowed per minute per client IP before 429. */
+  adminLoginRateLimit: number;
   /** Days of usage/audit logs to retain; 0 disables the cleanup job. */
   logRetentionDays: number;
   /** Local time (HH:MM) when the daily cleanup runs. */
@@ -47,13 +49,12 @@ export function loadConfig(): AppConfig {
     adminToken: process.env.ADMIN_TOKEN || "",
     logLevel,
     requestSizeLimitBytes: intEnv("REQUEST_SIZE_LIMIT_MB", 10) * 1024 * 1024,
-    connectTimeoutMs: intEnv("CONNECT_TIMEOUT_MS", 10_000),
     requestTimeoutMs: intEnv("REQUEST_TIMEOUT_MS", 120_000),
     streamIdleTimeoutMs: intEnv("STREAM_IDLE_TIMEOUT_MS", 60_000),
-    defaultTimeoutMs: intEnv("DEFAULT_TIMEOUT_MS", 15_000),
     adminDefaultUsername: process.env.ADMIN_DEFAULT_USERNAME || "admin",
     adminDefaultPassword: process.env.ADMIN_DEFAULT_PASSWORD || "admin123",
     adminSessionTtlMs: intEnv("ADMIN_SESSION_TTL_HOURS", 24) * 3_600_000,
+    adminLoginRateLimit: intEnv("ADMIN_LOGIN_RATE_LIMIT", 10),
     logRetentionDays: retentionDays(),
     logCleanupTime: parseCleanupTime(process.env.LOG_CLEANUP_TIME),
   };

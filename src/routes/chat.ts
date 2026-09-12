@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { z } from "zod";
+import type { AppConfig } from "../config/config";
 import { getAuth } from "../middleware/auth";
 import { getRequestId } from "../middleware/request-log";
 import { resolveRoutes, routeProviderConfig } from "../router/model-router";
@@ -19,14 +21,22 @@ const chatRequestSchema = z.object({
   max_tokens: z.number().optional(),
 });
 
-export const chatRoutes = new Hono();
+export function createChatRoutes(config: AppConfig) {
+  const chatRoutes = new Hono();
+  chatRoutes.post("/chat/completions", (c) => handleChat(c, config));
+  return chatRoutes;
+}
 
-chatRoutes.post("/chat/completions", async (c) => {
+async function handleChat(c: Context, config: AppConfig) {
   const auth = getAuth(c);
   const requestId = getRequestId(c);
   const startedAt = Date.now();
 
-  const parsed = chatRequestSchema.safeParse(c.get("chatBody"));
+  // Validate only what the gateway acts on, but forward the client body
+  // verbatim: the schema would otherwise strip parameters we do not model
+  // (tools, response_format, top_p, stop, ...) before they reach the upstream.
+  const rawBody = c.get("chatBody") as Record<string, unknown> | undefined;
+  const parsed = chatRequestSchema.safeParse(rawBody);
   if (!parsed.success) {
     throw badRequest(
       `Invalid request: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
@@ -53,13 +63,13 @@ chatRoutes.post("/chat/completions", async (c) => {
     stream: body.stream,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
-    rawBody: body as unknown as Record<string, unknown>,
+    rawBody: rawBody ?? {},
   };
 
   let lastError: Error | null = null;
 
   for (const route of routes) {
-    const provider = createProvider(routeProviderConfig(route));
+    const provider = createProvider(routeProviderConfig(route, config.requestTimeoutMs));
     try {
       if (body.stream) {
         const upstream = await provider.chatStream({ ...providerRequest, model: route.upstreamModel });
@@ -70,6 +80,7 @@ chatRoutes.post("/chat/completions", async (c) => {
           model: body.model,
           providerName: route.provider.name,
           startedAt,
+          idleTimeoutMs: config.streamIdleTimeoutMs,
         });
       }
 
@@ -166,7 +177,7 @@ chatRoutes.post("/chat/completions", async (c) => {
   }
   if (lastError?.message.includes("upstream timeout")) throw upstreamTimeout();
   throw upstreamError(lastError?.message ?? "All provider routes failed");
-});
+}
 
 /**
  * Wrap an upstream SSE response: forwards chunks as-is, parses events to
@@ -181,10 +192,10 @@ function wrapStreamResponse(
     model: string;
     providerName: string;
     startedAt: number;
+    idleTimeoutMs: number;
   },
 ): Response {
-  const { requestId, apiKeyId, model, providerName, startedAt } = meta;
-  const idleTimeoutMs = Number(process.env.STREAM_IDLE_TIMEOUT_MS || 60_000);
+  const { requestId, apiKeyId, model, providerName, startedAt, idleTimeoutMs } = meta;
   let promptTokens = 0;
   let completionTokens = 0;
 

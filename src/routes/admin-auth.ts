@@ -21,6 +21,7 @@ import { hashPassword, verifyPassword } from "../utils/crypto";
 import { randomToken } from "../utils/id";
 import { badRequest, unauthorized, forbidden, notFound } from "../utils/http-error";
 import { getAdminAuth } from "../middleware/admin-auth";
+import { rateLimiter } from "../middleware/rate-limit";
 import type { AppConfig } from "../config/config";
 
 /**
@@ -53,6 +54,12 @@ export function createAdminAuthRoutes(config: AppConfig) {
   });
 
   adminAuthRoutes.post("/login", async (c) => {
+    // Brute-force protection: the bucket counts attempts per client IP but is
+    // cleared on success, so only failures accumulate (ADMIN_LOGIN_RATE_LIMIT
+    // failures per minute before the IP gets a 429).
+    const throttleKey = `login:${clientIp(c)}`;
+    rateLimiter.check(throttleKey, config.adminLoginRateLimit);
+
     const body = loginSchema.parse(await c.req.json());
     const user = getAdminUserByName(body.username);
 
@@ -66,6 +73,8 @@ export function createAdminAuthRoutes(config: AppConfig) {
       recordAudit("admin_login_failed", `admin_user:${body.username}`, clientIp(c));
       throw unauthorized("Invalid username or password");
     }
+
+    rateLimiter.reset(throttleKey);
 
     const rawToken = SESSION_PREFIX + randomToken(40);
     createAdminSession({

@@ -13,7 +13,7 @@ import { loadLogs } from "./tabs/logs.js";
 import { initModels, loadModels } from "./tabs/models.js";
 import { initProviders, loadProviders } from "./tabs/providers.js";
 import { initSettings, loadSettings } from "./tabs/settings.js";
-import { loadUsage } from "./tabs/usage.js";
+import { initUsage, loadUsage } from "./tabs/usage.js";
 
 /** Per-tab loaders. Switching tabs only fetches that tab's data. */
 const tabs = {
@@ -35,6 +35,7 @@ function init() {
   initModels();
   initKeys();
   initConfigs();
+  initUsage();
   initSettings();
 
   // Logging in reloads the visible tab; clearing the session just hides the UI.

@@ -2,6 +2,9 @@ import type { Provider, ProviderConfig, ProviderRequest, ChatCompletionResult } 
 import { fetchUpstream, filterResponseHeaders } from "../utils/http";
 import { UpstreamStatusError } from "../utils/http-error";
 
+/** Model listing is a cheap metadata call; not worth a configurable timeout. */
+const MODELS_TIMEOUT_MS = 15_000;
+
 export class OpenAIProvider implements Provider {
   constructor(protected readonly config: ProviderConfig) {}
 
@@ -41,7 +44,7 @@ export class OpenAIProvider implements Provider {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(this.buildBody(request)),
-      timeoutMs: 120_000,
+      timeoutMs: this.config.requestTimeoutMs,
     });
 
     if (!response.ok) {
@@ -90,7 +93,7 @@ export class OpenAIProvider implements Provider {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(this.buildStreamBody(request)),
-      timeoutMs: 0, // No timeout for streams; handled by idle timeout at gateway level.
+      timeoutMs: 0, // No overall timeout for streams; the gateway enforces STREAM_IDLE_TIMEOUT_MS.
     });
     if (!response.ok) {
       const text = await response.text();
@@ -106,7 +109,7 @@ export class OpenAIProvider implements Provider {
     const response = await fetchUpstream(this.endpoint("/models"), {
       method: "GET",
       headers: this.headers(),
-      timeoutMs: 15_000,
+      timeoutMs: MODELS_TIMEOUT_MS,
     });
     if (!response.ok) return [];
     const json = (await response.json()) as { data?: Array<{ id?: string }> };

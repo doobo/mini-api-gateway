@@ -1,7 +1,10 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
+import type { AppConfig } from "../config/config";
 import { getAuth } from "../middleware/auth";
 import { forbidden } from "../utils/http-error";
 import { getRequestId } from "../middleware/request-log";
+import { readBodyText } from "../middleware/body-limit";
 import { getApiConfigByName, recordUsage } from "../db/queries";
 import { decryptSecret } from "../utils/secretbox";
 import { renderTemplate, findUnresolved } from "../transform/template";
@@ -10,9 +13,13 @@ import { fetchUpstream, filterRequestHeaders, filterResponseHeaders } from "../u
 import { badRequest, notFound, upstreamError, upstreamTimeout, internalError } from "../utils/http-error";
 import { logger } from "../utils/logger";
 
-export const forwardRoutes = new Hono();
+export function createForwardRoutes(appConfig: AppConfig) {
+  const forwardRoutes = new Hono();
+  forwardRoutes.all("/:config", (c) => handleForward(c, appConfig));
+  return forwardRoutes;
+}
 
-forwardRoutes.all("/:config", async (c) => {
+async function handleForward(c: Context, appConfig: AppConfig) {
   const auth = getAuth(c);
   const requestId = getRequestId(c);
   const startedAt = Date.now();
@@ -29,6 +36,19 @@ forwardRoutes.all("/:config", async (c) => {
     throw forbidden(`API config '${configName}' is not allowed for this API key`, "config_not_allowed");
   }
 
+  // Every exit path records usage with the same shape; keep that in one place
+  // so no branch can forget it (there used to be five near-identical calls).
+  const recordApiUsage = (status: number, error?: string): void =>
+    recordUsage({
+      requestId,
+      apiKeyId: auth.apiKey.id,
+      kind: "api",
+      apiConfigId: config.id,
+      latencyMs: Date.now() - startedAt,
+      status,
+      error,
+    });
+
   // Parse client request pieces.
   const clientMethod = c.req.method;
   const clientHeaders: Record<string, string> = {};
@@ -37,7 +57,8 @@ forwardRoutes.all("/:config", async (c) => {
   });
   let clientBody: unknown = null;
   if (clientMethod !== "GET" && clientMethod !== "HEAD") {
-    const raw = await c.req.text();
+    // Size-limited read (see middleware/body-limit.ts).
+    const raw = await readBodyText(c);
     if (raw) {
       try {
         clientBody = JSON.parse(raw);
@@ -115,25 +136,15 @@ forwardRoutes.all("/:config", async (c) => {
       method,
       headers: upstreamHeaders,
       body,
-      timeoutMs: config.timeout_ms || 15_000,
+      // Per-config timeout, falling back to the gateway default (REQUEST_TIMEOUT_MS).
+      timeoutMs: config.timeout_ms || appConfig.requestTimeoutMs,
     });
   } catch (error) {
-    const latencyMs = Date.now() - startedAt;
     const isTimeout = error instanceof Error && error.message.includes("upstream timeout");
-    recordUsage({
-      requestId,
-      apiKeyId: auth.apiKey.id,
-      kind: "api",
-      apiConfigId: config.id,
-      latencyMs,
-      status: isTimeout ? 504 : 502,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    recordApiUsage(isTimeout ? 504 : 502, error instanceof Error ? error.message : String(error));
     if (isTimeout) throw upstreamTimeout();
     throw upstreamError(error instanceof Error ? error.message : "Upstream request failed");
   }
-
-  const latencyMs = Date.now() - startedAt;
 
   // Response template: transform JSON response; otherwise passthrough.
   const responseTemplate = safeParseJson<unknown>(config.response_template);
@@ -146,58 +157,28 @@ forwardRoutes.all("/:config", async (c) => {
     try {
       upstreamJson = await response.json();
     } catch {
-      recordUsage({
-        requestId,
-        apiKeyId: auth.apiKey.id,
-        kind: "api",
-        apiConfigId: config.id,
-        latencyMs,
-        status: 502,
-        error: "Response template configured but upstream returned non-JSON",
-      });
+      recordApiUsage(502, "Response template configured but upstream returned non-JSON");
       throw upstreamError("Upstream returned non-JSON response but response template is configured");
     }
     const rendered = renderTemplate(responseTemplate, { data: upstreamJson });
     const unresolved = findUnresolved(responseTemplate, { data: upstreamJson });
     if (unresolved.length > 0) {
-      recordUsage({
-        requestId,
-        apiKeyId: auth.apiKey.id,
-        kind: "api",
-        apiConfigId: config.id,
-        latencyMs,
-        status: 502,
-        error: `Response template has unresolved placeholders: ${unresolved.join(", ")}`,
-      });
+      recordApiUsage(502, `Response template has unresolved placeholders: ${unresolved.join(", ")}`);
       throw upstreamError(`Response template has unresolved placeholders: ${unresolved.join(", ")}`);
     }
     responseBody = JSON.stringify(rendered);
     responseHeaders = { ...responseHeaders, "content-type": "application/json" };
-    recordUsage({
-      requestId,
-      apiKeyId: auth.apiKey.id,
-      kind: "api",
-      apiConfigId: config.id,
-      latencyMs,
-      status,
-    });
+    recordApiUsage(status);
   } else {
     // Pure passthrough.
     responseBody = response.body;
-    recordUsage({
-      requestId,
-      apiKeyId: auth.apiKey.id,
-      kind: "api",
-      apiConfigId: config.id,
-      latencyMs,
-      status,
-    });
+    recordApiUsage(status);
   }
 
   const headers = new Headers(responseHeaders);
   headers.set("X-Request-ID", requestId);
   return new Response(responseBody, { status, headers });
-});
+}
 
 function safeParseJson<T>(raw: string | null): T | null {
   if (!raw) return null;

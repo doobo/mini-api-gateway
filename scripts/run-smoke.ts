@@ -79,12 +79,15 @@ function seedDatabase(): void {
   // Rotated through the admin API during the smoke run, which re-stores the
   // key encrypted; used to prove encrypted keys decrypt on the call path.
   insProvider.run("mock-encrypted", "openai", "http://localhost:5699/v1", "sk-stale-plaintext", now, now);
+  // Echoes the forwarded body (id 6) - used by the param passthrough test.
+  insProvider.run("mock-echo", "openai", "http://localhost:5699/echo/v1", "sk-upstream-mock", now, now);
   const insModel = db.prepare(
     "INSERT INTO models (name, provider_id, upstream_model, enabled, priority, created_at) VALUES (?, ?, ?, 1, 100, ?)",
   );
   insModel.run("gpt", 1, "gpt-5-mock", now);
   insModel.run("internal", 1, "internal-model", now);
   insModel.run("enc-model", 5, "gpt-5-mock", now);
+  insModel.run("passthrough", 6, "echo-model", now);
 
   const insRoute = db.prepare(
     "INSERT INTO model_routes (model_name, provider_id, upstream_model, priority, weight, enabled) VALUES (?, ?, ?, ?, 100, 1)",
@@ -155,6 +158,10 @@ async function main(): Promise<void> {
       ADMIN_TOKEN: "test-admin-token",
       LOG_LEVEL: "info",
       ALLOW_PRIVATE_UPSTREAMS: "1",
+      // Small limit so the body-size tests do not have to send 10 MB.
+      REQUEST_SIZE_LIMIT_MB: "1",
+      // Pinned so the login-throttle test is independent of the default.
+      ADMIN_LOGIN_RATE_LIMIT: "10",
       SMOKE_PORT: String(GATEWAY_PORT),
       LOG_RETENTION_DAYS: "7",
       LOG_CLEANUP_TIME: "03:00",

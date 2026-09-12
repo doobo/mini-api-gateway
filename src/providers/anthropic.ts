@@ -98,7 +98,7 @@ export class AnthropicProvider extends OpenAIProvider {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(this.toAnthropicBody(request, false)),
-      timeoutMs: 120_000,
+      timeoutMs: this.config.requestTimeoutMs,
     });
 
     if (!response.ok) {

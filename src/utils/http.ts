@@ -1,6 +1,11 @@
-/** Hop-by-hop / auth headers never forwarded to upstreams. */
+/**
+ * Hop-by-hop / auth / browser-state headers never forwarded to upstreams.
+ * `cookie` is blocked because it belongs to this gateway's own origin: leaking
+ * it to a third-party API would expose the client's session state.
+ */
 const REQUEST_HEADER_BLOCKLIST = new Set([
   "authorization",
+  "cookie",
   "host",
   "content-length",
   "connection",

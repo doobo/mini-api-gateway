@@ -211,11 +211,27 @@
     <section id="tab-usage" class="tab">
       <div class="panel">
         <h2>Recent Usage</h2>
+        <form id="usageFilters" class="form-inline">
+          <input id="usageFilterModel" placeholder="model" aria-label="Filter by model" autocomplete="off">
+          <input id="usageFilterProvider" placeholder="provider" aria-label="Filter by provider" autocomplete="off">
+          <select id="usageFilterKind" aria-label="Filter by kind">
+            <option value="">all kinds</option>
+            <option value="ai">ai</option>
+            <option value="api">api</option>
+          </select>
+          <input id="usageFilterStatus" placeholder="status" inputmode="numeric" aria-label="Filter by status code" autocomplete="off">
+          <button type="submit">Filter</button>
+          <button type="button" id="usageFilterReset" class="secondary">Reset</button>
+        </form>
         <div class="table-wrap">
           <table id="usageTable">
             <thead><tr><th>Time</th><th>Request ID</th><th>Kind</th><th>Model/Config</th><th>Provider</th><th>Tokens</th><th>Status</th><th>Latency</th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+        <div class="panel-foot">
+          <button type="button" id="usageLoadMore" class="secondary small hidden">Load more</button>
+          <span id="usageCount" class="hint" role="status"></span>
         </div>
       </div>
     </section>

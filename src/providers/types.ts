@@ -4,6 +4,8 @@ export interface ProviderConfig {
   type: "openai" | "anthropic" | "compatible";
   baseUrl: string;
   apiKey: string | null;
+  /** Hard timeout for non-streaming upstream calls (REQUEST_TIMEOUT_MS). */
+  requestTimeoutMs: number;
 }
 
 export interface ProviderRequest {

@@ -2,6 +2,7 @@
  * Mock OpenAI-compatible upstream used for gateway smoke tests.
  * Routes:
  *   POST /v1/chat/completions        - normal + streaming responses
+ *   POST /echo/v1/chat/completions   - reports which body keys it received
  *   POST /fail/500|429|timeout       - error simulation for failover tests
  *   *  /anything                     - echo of method/headers/body (for /f forwarding)
  */
@@ -55,6 +56,26 @@ app.post("/v1/chat/completions", async (c) => {
   });
 });
 
+// Echoes the JSON body the gateway forwarded, so tests can assert that client
+// parameters the gateway does not model reach the upstream untouched.
+app.post("/echo/v1/chat/completions", async (c) => {
+  const body = (await c.req.json()) as Record<string, unknown>;
+  return c.json({
+    id: "chatcmpl-echo",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: body.model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: `keys:${Object.keys(body).sort().join(",")}` },
+        finish_reason: "stop",
+      },
+    ],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  });
+});
+
 // Fixed-status routes for failover testing (base_url embeds the path).
 app.all("/fail500/*", (c) => c.text("upstream fail 500", 500));
 app.all("/fail429/*", (c) => c.text("upstream fail 429", 429));
@@ -73,6 +94,8 @@ app.all("/anything", async (c) => {
     query: c.req.query(),
     body,
     auth: c.req.header("authorization") ?? null,
+    // Reported so tests can assert which browser headers were *not* forwarded.
+    cookie: c.req.header("cookie") ?? null,
   });
 });
 

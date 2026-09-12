@@ -1,7 +1,7 @@
 import {
   getModelByName,
   getProvider,
-  listModelRoutes,
+  listModelRoutesFor,
 } from "../db/queries";
 import type { ProviderRow } from "../db/queries";
 import { notFound, internalError } from "../utils/http-error";
@@ -23,9 +23,7 @@ export interface ResolvedRoute {
  * the single entry in `models`.
  */
 export function resolveRoutes(modelName: string): ResolvedRoute[] {
-  const routes = listModelRoutes().filter(
-    (route) => route.model_name === modelName,
-  );
+  const routes = listModelRoutesFor(modelName);
 
   if (routes.length > 0) {
     return routes
@@ -60,7 +58,10 @@ export function resolveRoutes(modelName: string): ResolvedRoute[] {
   ];
 }
 
-export function routeProviderConfig(route: ResolvedRoute): ProviderConfig {
+export function routeProviderConfig(
+  route: ResolvedRoute,
+  requestTimeoutMs: number,
+): ProviderConfig {
   return {
     id: route.provider.id,
     name: route.provider.name,
@@ -68,6 +69,7 @@ export function routeProviderConfig(route: ResolvedRoute): ProviderConfig {
     baseUrl: route.provider.base_url,
     // The stored key is encrypted at rest; upstream calls need plaintext.
     apiKey: runtimeProviderKey(route.provider),
+    requestTimeoutMs,
   };
 }
 

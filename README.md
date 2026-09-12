@@ -22,7 +22,7 @@
 - **Admin API + Web UI**：浏览器完成 Provider / Model / Key / API Config 配置，敏感 Key 默认脱敏且不可查看；Models 页支持 Provider 名称本地搜索选中，API Configs 支持创建后编辑
 - **管理员账号登录**：默认账号 `admin / admin123`（首次启动自动创建，bcrypt 加密存储），支持登录会话、修改密码、密码重置；登录失败等安全事件写入审计日志
 - **Settings 页管理员管理**：Web UI 的 Settings 页可创建/禁用/删除管理员、重置密码（禁止自删与禁用最后一个可用管理员）
-- **安全**：SSRF 防护（默认禁内网地址与 `file://`）、Header 过滤、请求大小限制、超时控制
+- **安全**：SSRF 防护（默认禁内网地址与 `file://`）、Header 过滤（认证头与 Cookie 不下发上游）、请求大小限制（`/v1` 与 `/f` 同一限制，边读边校验）、超时控制、登录失败限流
 - **单机部署**：WAL 模式 SQLite，无 Redis / PostgreSQL 依赖，支持单文件编译与 Docker
 
 ## 快速开始
@@ -78,8 +78,9 @@ const res = await client.chat.completions.create({
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `ALLOW_PRIVATE_UPSTREAMS` | 关 | 本机部署 Ollama 等私有上游时设为 `1`（放宽 SSRF 校验） |
 | `REQUEST_SIZE_LIMIT_MB` | `10` | 请求体大小限制 |
-| `REQUEST_TIMEOUT_MS` | `120000` | 非 AI 转发默认超时 |
-| `STREAM_IDLE_TIMEOUT_MS` | `60000` | 流式空闲超时 |
+| `REQUEST_TIMEOUT_MS` | `120000` | 上游请求超时（非流式 Chat；`/f/*` 中未配 `timeout_ms` 时的默认值） |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | 流式空闲超时（超过该时长没有新数据则关闭流） |
+| `ADMIN_LOGIN_RATE_LIMIT` | `10` | 同一 IP 每分钟允许的登录失败次数，超过后返回 429（登录成功即清零） |
 
 ## 单文件编译
 
@@ -131,7 +132,7 @@ bun run release patch --dry-run  # 预演，不实际改动
 | GET | `/admin/auth/me` | 会话/静态 Token | 当前登录身份 |
 | PUT | `/admin/auth/password` | 会话 | 修改自己的密码（需当前密码） |
 | POST | `/admin/auth/reset` | 仅静态 Token | 重置指定管理员密码为默认值 |
-| POST | `/admin/auth/users` | 仅静态 Token | 创建额外管理员账号 |
+| POST | `/admin/auth/users` | 会话/静态 Token | 创建额外管理员账号 |
 | GET | `/admin/auth/users` | 会话/静态 Token | 管理员用户列表（不含密码哈希） |
 | PUT | `/admin/auth/users/:id` | 会话/静态 Token | 重置指定用户密码 / 启用禁用 |
 | DELETE | `/admin/auth/users/:id` | 会话/静态 Token | 删除管理员用户（保护最后一个可用管理员） |
@@ -181,7 +182,10 @@ curl -X POST http://localhost:5630/f/weather \
 
 ```bash
 bun run check             # TypeScript 类型检查
-bun scripts/run-smoke.ts  # 38 项端到端冒烟测试（含 mock 上游）
+bun scripts/run-smoke.ts  # 端到端冒烟测试（自动拉起 mock 上游 + 干净 DB）
+
+# 若 5630 已被 dev 占用，换端口跑：
+SMOKE_PORT=5631 bun scripts/run-smoke.ts
 ```
 
 ## 项目结构
@@ -192,8 +196,7 @@ src/
 ├── web-assets.ts         # Web UI 内嵌
 ├── config/config.ts      # 环境变量配置
 ├── db/                   # SQLite 连接 / 迁移 / 查询
-├── auth/                 # 认证辅助
-├── middleware/           # api-key / rate-limit / request-log
+├── middleware/           # api-key / admin-auth / body-limit / rate-limit / request-log
 ├── router/               # 模型路由 + Failover
 ├── providers/            # openai / anthropic / compatible + factory
 ├── transform/            # 路径模板引擎
