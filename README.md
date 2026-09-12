@@ -200,5 +200,8 @@ src/
 ├── routes/               # chat / models / forward / admin
 └── utils/                # crypto / id / sse / ssrf / http / logger
 web/                      # 管理页面（构建时内嵌）
+├── index.html            # 页面结构（语义化标签 + 移动端适配）
+├── style/                # base（变量/重置）/ layout（骨架）/ components（组件）
+└── js/                   # ES 模块：core/ 通用能力，tabs/ 每个页面一个模块
 scripts/                  # mock 上游 + 冒烟测试
 ```

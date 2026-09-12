@@ -1,0 +1,271 @@
+/* Page shell: login view, header, tab bar, main content. */
+
+/* Signed-out view: a single centered card, no app chrome around it. */
+.login-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+.login-card {
+  display: grid;
+  gap: 10px;
+  width: min(360px, 100%);
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.login-card h1 {
+  font-size: 18px;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.login-card .banner {
+  margin: 0;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.app-header h1 {
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.user-name {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* The username opens a small menu with the account actions, so the header
+   stays a single row on every screen size. */
+.user-menu {
+  position: relative;
+}
+
+.user-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.user-menu-toggle .caret {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.user-menu-panel button {
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.user-menu-panel button:hover {
+  background: var(--panel-alt);
+  filter: none;
+}
+
+.user-menu-panel button.danger {
+  background: none;
+  color: var(--danger);
+}
+
+.user-menu-panel button.danger:hover {
+  background: rgba(255, 95, 86, 0.12);
+}
+
+/* ---------------------------------------------------------------- tabs */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 24px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs button {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- main */
+
+main {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.tab {
+  display: none;
+}
+
+.tab.active {
+  display: block;
+}
+
+.panel + .panel {
+  margin-top: 28px;
+}
+
+h2 {
+  font-size: 15px;
+  color: var(--muted);
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Panel title with an action button (e.g. a collapsible create form). */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: 10px;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--gap);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.card-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-value {
+  font-size: 26px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+/* --------------------------------------------------------- responsive */
+
+@media (max-width: 720px) {
+  /* Title and account menu stay on one row: the username may truncate, but
+     the menu never wraps onto its own line. */
+  .app-header {
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 10px 16px;
+  }
+
+  .app-header h1 {
+    font-size: 15px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .user-name {
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 8px 12px 0;
+  }
+
+  .tabs button {
+    padding: 12px 12px;
+  }
+
+  main {
+    padding: 16px;
+  }
+
+  .panel + .panel {
+    margin-top: 22px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  }
+
+  .card {
+    padding: 12px;
+  }
+
+  .card-value {
+    font-size: 22px;
+  }
+}

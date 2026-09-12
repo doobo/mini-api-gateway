@@ -92,10 +92,11 @@ app.route("/admin", admin);
 
 // -------------------------------------------------------------- web ui
 
-app.get("/", (c) => c.html(webAssets["/"]!.body));
-app.get("/index.html", (c) => c.html(webAssets["/index.html"]!.body));
-app.get("/app.js", (c) => c.body(webAssets["/app.js"]!.body, 200, { "content-type": webAssets["/app.js"]!.contentType }));
-app.get("/style.css", (c) => c.body(webAssets["/style.css"]!.body, 200, { "content-type": webAssets["/style.css"]!.contentType }));
+// Every embedded asset is served at its own path: the HTML entry plus the
+// ES modules and stylesheets it pulls in.
+for (const [path, asset] of Object.entries(webAssets)) {
+  app.get(path, (c) => c.body(asset.body, 200, { "content-type": asset.contentType }));
+}
 
 // ------------------------------------------------------- error handling
 
